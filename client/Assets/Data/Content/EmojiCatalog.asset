@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5a181c783ae357b4cb0dd51d719ff16b, type: 3}
+  m_Name: EmojiCatalog
+  m_EditorClassIdentifier: EmojiWar.Client.Content::EmojiWar.Client.Content.StaticEmojiCatalog
+  emojis:
+  - {fileID: 11400000, guid: 8d31ae5552c8e2f4fbcc9de98b0467c6, type: 2}
+  - {fileID: 11400000, guid: fe831581d3cb4c041aa269a6a6518410, type: 2}
+  - {fileID: 11400000, guid: 565f3400fdb83974485d39eaf974a375, type: 2}
+  - {fileID: 11400000, guid: 993104a517ba7e248a8989e2a81787fd, type: 2}
+  - {fileID: 11400000, guid: 8f457634dcb11e643aca66ecd3efd936, type: 2}
+  - {fileID: 11400000, guid: 9a2cfe82f8691d84a9308ccada1527be, type: 2}
+  - {fileID: 11400000, guid: 03161ec77aa57d848b3648212c56f035, type: 2}
+  - {fileID: 11400000, guid: cba56819afd9cd241b648879ea60ea4d, type: 2}
+  - {fileID: 11400000, guid: 650e53037c89da645acd41a9ad01cf8e, type: 2}
+  - {fileID: 11400000, guid: 2430e99216ca3844e9234101594bf708, type: 2}
+  - {fileID: 11400000, guid: 04c2442bd92a29b4abc01ef5c738243b, type: 2}
+  - {fileID: 11400000, guid: c9d783be1563ad1458f1d9b97fd9864b, type: 2}
+  - {fileID: 11400000, guid: 5228607d8080d954390595acdc07e7b4, type: 2}
+  - {fileID: 11400000, guid: acffd6185bd983046b4272727068f984, type: 2}
+  - {fileID: 11400000, guid: d481dbc1f67d1864a87893e7318408db, type: 2}
+  - {fileID: 11400000, guid: 081c7c905eddd2546bfe413d3d36e859, type: 2}

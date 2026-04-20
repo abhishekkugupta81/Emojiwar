@@ -1,0 +1,26 @@
+{
+  "name": "emojiwar",
+  "version": "1.0.0",
+  "description": "EmojiWar is a portrait mobile 5v5 squad battler for iPhone and Android built around blind bans, formation, and deterministic auto-battle resolution.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "supabase:start": "npx supabase start",
+    "supabase:stop": "npx supabase stop",
+    "supabase:status": "npx supabase status",
+    "supabase:db:reset": "npx supabase db reset",
+    "supabase:functions:serve": "npx supabase functions serve",
+    "test:resolver": "deno test supabase/functions/_shared/*.test.ts",
+    "verify:resolver": "deno run supabase/functions/_shared/verify-resolver.ts",
+    "test": "npm run test:resolver"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "supabase": "^2.84.10"
+  }
+}

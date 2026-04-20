@@ -1,0 +1,49 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e5d3420276e4d6d438201704d3b35b8e, type: 3}
+  m_Name: UiThemeProfile
+  m_EditorClassIdentifier:
+  HomeGradient:
+    Top: {r: 0.16470589, g: 0.11764706, b: 0.36078432, a: 1}
+    Bottom: {r: 0.20392157, g: 0.7137255, b: 1, a: 1}
+  SquadGradient:
+    Top: {r: 0.16470589, g: 0.11764706, b: 0.36078432, a: 1}
+    Bottom: {r: 0.23921569, g: 1, b: 0.81960785, a: 1}
+  BanGradient:
+    Top: {r: 0.10980392, g: 0.09019608, b: 0.2509804, a: 1}
+    Bottom: {r: 1, g: 0.5411765, b: 0.23921569, a: 1}
+  FormationGradient:
+    Top: {r: 0.16470589, g: 0.11764706, b: 0.36078432, a: 1}
+    Bottom: {r: 0.20392157, g: 0.7137255, b: 1, a: 1}
+  ResultGradient:
+    Top: {r: 0.16470589, g: 0.11764706, b: 0.36078432, a: 1}
+    Bottom: {r: 0.49019608, g: 1, b: 0.41568628, a: 1}
+  CardColors:
+    Default: {r: 0.07058824, g: 0.06666667, b: 0.14901961, a: 0.88}
+    Selected: {r: 0.54509807, g: 0.36078432, b: 1, a: 0.96}
+    Banned: {r: 1, g: 0.35686275, b: 0.43137255, a: 0.94}
+    Disabled: {r: 0.07, g: 0.07, b: 0.12, a: 0.48}
+  AttackAccent: {r: 1, g: 0.5411765, b: 0.23921569, a: 1}
+  ControlAccent: {r: 0.20392157, g: 0.7137255, b: 1, a: 1}
+  BurstAccent: {r: 1, g: 0.35686275, b: 0.43137255, a: 1}
+  SupportAccent: {r: 0.23921569, g: 1, b: 0.81960785, a: 1}
+  RampAccent: {r: 0.49019608, g: 1, b: 0.41568628, a: 1}
+  HeroFontSize: 56
+  HeadingFontSize: 30
+  BodyFontSize: 22
+  ChipFontSize: 18
+  SurfaceColor: {r: 0.11, g: 0.17, b: 0.27, a: 0.9}
+  SurfaceOutline: {r: 0.972549, g: 0.96862745, b: 1, a: 0.81960785}
+  PrimaryCtaColor: {r: 1, g: 0.30980393, b: 0.84705883, a: 1}
+  SecondaryCtaColor: {r: 0.54509807, g: 0.36078432, b: 1, a: 1}
+  ShadowLift: 1.35
+  GlowStrength: 1.65

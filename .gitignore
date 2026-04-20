@@ -1,0 +1,31 @@
+# Unity
+/client/Library/
+/client/Logs/
+/client/Obj/
+/client/Temp/
+/client/UserSettings/
+/client/MemoryCaptures/
+/client/Build/
+/client/Builds/
+/Builds/
+*.csproj
+*.sln
+
+# Node / TypeScript
+node_modules/
+npm-debug.log*
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vs/
+.vscode/
+
+# Local task output
+/Temp/
+unity-*.log
+
+# Supabase local state
+/supabase/.branches/
+/supabase/.temp/
+/supabase/snippets/

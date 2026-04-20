@@ -1,0 +1,6 @@
+{
+  "name": "EmojiWar.Client.Core",
+  "references": [
+    "EmojiWar.Client.Content"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "EmojiWar.Client.Gameplay",
+  "references": [
+    "EmojiWar.Client.Core",
+    "EmojiWar.Client.Content"
+  ]
+}

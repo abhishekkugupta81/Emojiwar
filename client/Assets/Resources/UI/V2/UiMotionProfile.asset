@@ -1,0 +1,42 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7bd1e152bb7e4db429eb4117930a7f9f, type: 3}
+  m_Name: UiMotionProfile
+  m_EditorClassIdentifier: 
+  IdleBobSeconds:
+    Min: 1.8
+    Max: 2.4
+  IdleTiltSeconds:
+    Min: 1.5
+    Max: 2.3
+  IdleScaleSeconds:
+    Min: 1.8
+    Max: 2.4
+  IdleBobPixels: 4
+  IdleTiltDegrees: 1.5
+  IdleScaleAmount: 0.03
+  JumpSelectSeconds:
+    Min: 0.18
+    Max: 0.24
+  StickerSlamSeconds:
+    Min: 0.18
+    Max: 0.22
+  SnapToSlotSeconds:
+    Min: 0.24
+    Max: 0.32
+  JumpScaleOvershoot: 1.08
+  SnapArcPixels: 28
+  CtaBreatheSeconds: 2.2
+  CtaBreatheScale: 0.04
+  VictoryBurstSeconds:
+    Min: 0.26
+    Max: 0.42

@@ -1,0 +1,9 @@
+{
+  "name": "EmojiWar.Client.UI",
+  "references": [
+    "EmojiWar.Client.Core",
+    "EmojiWar.Client.Content",
+    "EmojiWar.Client.Gameplay",
+    "Unity.TextMeshPro"
+  ]
+}
