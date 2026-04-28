@@ -17,6 +17,7 @@ namespace EmojiWar.Client.Core
         public const string PvpRanked = "pvp_ranked";
         public const string BotPractice = "bot_practice";
         public const string BotSmart = "bot_smart";
+        public const string EmojiClashLocal = "emoji_clash_local";
         public const string DeckBuilderFlowEdit = "edit";
         public const string DeckBuilderFlowRankedEntry = "ranked_entry";
         public const string DeckBuilderFlowBotPracticeEntry = "bot_practice_entry";
@@ -74,6 +75,14 @@ namespace EmojiWar.Client.Core
         {
             SetSelectedMode(mode == BotSmart ? BotSmart : BotPractice);
             SetDeckBuilderFlow(mode == BotSmart ? DeckBuilderFlowBotSmartEntry : DeckBuilderFlowBotPracticeEntry);
+        }
+
+        public static void BeginEmojiClash()
+        {
+            SetSelectedMode(EmojiClashLocal);
+            SetDeckBuilderFlow(DeckBuilderFlowEdit);
+            ClearPendingSquad();
+            ClearRankedResume();
         }
 
         public static void BeginDeckEdit()

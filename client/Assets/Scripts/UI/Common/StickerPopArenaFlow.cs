@@ -235,6 +235,7 @@ namespace EmojiWar.Client.UI.Common
             screen.Bind(
                 DemoOpponentSquad.Select(emojiId => BlindBanRescueScreen.UnitView.FromEmojiId(emojiId, enemyTone: true)).ToArray(),
                 matchSquad.Select(emojiId => BlindBanRescueScreen.UnitView.FromEmojiId(emojiId, enemyTone: false)).ToArray(),
+                BlindBanRescueScreen.BlindBanVisibilityMode.TestingRevealOpponentCards,
                 selectedEnemyBan.HasValue ? EmojiIdUtility.ToApiId(selectedEnemyBan.Value) : string.Empty,
                 banLocked && selectedEnemyBan.HasValue ? EmojiIdUtility.ToApiId(selectedEnemyBan.Value) : string.Empty,
                 EmojiIdUtility.ToApiId(opponentBan),

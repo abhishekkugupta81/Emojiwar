@@ -131,6 +131,41 @@ Deno.test("frontline protection changes the opening clash lane", () => {
   );
 });
 
+Deno.test("same-side flank targeting no longer defaults to front left", () => {
+  const rightLane = resolveWithFormations(
+    ["fire"],
+    ["heart", "soap"],
+    { placements: [{ slot: "front_right", emojiId: "fire" }] },
+    {
+      placements: [
+        { slot: "front_left", emojiId: "heart" },
+        { slot: "front_right", emojiId: "soap" },
+      ],
+    },
+    "same-side-right-lane",
+  );
+
+  const firstAttack = rightLane.battleState.eventLog.find((event) => event.type === "attack");
+  assert(firstAttack?.target === "player_b:front_right", `Expected the right-lane target to be hit first, got ${serialize(firstAttack)}`);
+});
+
+Deno.test("hole can delete ghost before the dive resolves", () => {
+  const result = resolve(["hole"], ["ghost"], "hole-ghost");
+  assert(
+    result.battleState.eventLog.some((event) => event.caption.includes("Hole caught Ghost's dive path")),
+    "Expected Hole to counter Ghost with a delete event.",
+  );
+  assert(result.winner === "player_a", `Hole should beat Ghost in the direct lane, got ${result.winner}`);
+});
+
+Deno.test("soap can disrupt ghost instead of folding to the dive", () => {
+  const result = resolve(["soap"], ["ghost"], "soap-ghost");
+  assert(
+    result.battleState.eventLog.some((event) => event.caption.includes("Soap scrubbed Ghost's dive timing away")),
+    "Expected Soap to produce the anti-Ghost counter event.",
+  );
+});
+
 Deno.test("backline units advance when the frontline collapses", () => {
   const result = resolveWithFormations(
     ["shield"],

@@ -15,7 +15,7 @@ namespace EmojiWar.Client.UI.Home
     /// </summary>
     public sealed class HomeRescueScreen : MonoBehaviour
     {
-        private static readonly Vector2 SquadMiniSize = new(110f, 104f);
+        private static readonly Vector2 SquadMiniSize = EmojiWarVisualStyle.Layout.SquadStripTile;
         private static readonly EmojiId[] StarterSquad =
         {
             EmojiId.Fire,
@@ -73,16 +73,16 @@ namespace EmojiWar.Client.UI.Home
             RescueStickerFactory.CreateGradientLikeBackground(
                 root,
                 "HomeStickerPopGradient",
-                RescueStickerFactory.Palette.ElectricPurple,
-                RescueStickerFactory.Palette.Mint);
+                EmojiWarVisualStyle.Colors.BgTop,
+                EmojiWarVisualStyle.Colors.BgBottom);
 
             contentRoot = CreateRect("HomeRescueContent", root);
             Stretch(contentRoot);
 
             CreateHeader();
-            CreateHeroArena();
+            CreateHeroStage();
             CreateCurrentSquad();
-            CreatePrimaryCta();
+            CreateModeCtas();
             CreateSecondaryActions();
             CreateBottomNav();
         }
@@ -90,95 +90,143 @@ namespace EmojiWar.Client.UI.Home
         private void CreateHeader()
         {
             var header = CreateRect("HomeHeader", contentRoot);
-            SetAnchors(header, new Vector2(0.06f, 0.82f), new Vector2(0.94f, 0.965f));
+            SetAnchors(header, new Vector2(0.06f, 0.905f), new Vector2(0.94f, 0.972f));
             AddEnterTarget(header);
 
             RescueStickerFactory.CreateLabel(
                 header,
                 "Logo",
                 "Emoji War",
-                18f,
+                20f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SunnyYellow,
                 TextAlignmentOptions.Left,
-                new Vector2(0f, 0.72f),
-                new Vector2(0.42f, 1f));
-
-            RescueStickerFactory.CreateLabel(
-                header,
-                "Title",
-                "Ranked PvP",
-                42f,
-                FontStyles.Bold,
-                RescueStickerFactory.Palette.SoftWhite,
-                TextAlignmentOptions.Left,
-                new Vector2(0f, 0.18f),
-                new Vector2(0.70f, 0.76f));
+                new Vector2(0f, 0.34f),
+                new Vector2(0.42f, 0.94f));
 
             var seasonChip = RescueStickerFactory.CreateStatusChip(
                 header,
                 "Season 1",
                 RescueStickerFactory.Palette.SunnyYellow,
                 RescueStickerFactory.Palette.InkPurple);
-            SetAnchors(seasonChip.GetComponent<RectTransform>(), new Vector2(0.58f, 0.62f), new Vector2(0.82f, 0.94f));
+            SetAnchors(seasonChip.GetComponent<RectTransform>(), new Vector2(0.56f, 0.38f), new Vector2(0.80f, 0.94f));
 
             var rankedChip = RescueStickerFactory.CreateStatusChip(
                 header,
                 "Ranked",
                 RescueStickerFactory.Palette.Mint,
                 RescueStickerFactory.Palette.InkPurple);
-            SetAnchors(rankedChip.GetComponent<RectTransform>(), new Vector2(0.84f, 0.62f), new Vector2(1f, 0.94f));
-
-            RescueStickerFactory.CreateLabel(
-                header,
-                "Subtitle",
-                "Build a squad. Ban one. Battle fast.",
-                18f,
-                FontStyles.Bold,
-                RescueStickerFactory.Palette.SoftWhite,
-                TextAlignmentOptions.Left,
-                new Vector2(0f, 0f),
-                new Vector2(0.90f, 0.24f));
+            SetAnchors(rankedChip.GetComponent<RectTransform>(), new Vector2(0.82f, 0.38f), new Vector2(1f, 0.94f));
         }
 
-        private void CreateHeroArena()
+        private void CreateHeroStage()
         {
-            var hero = RescueStickerFactory.CreateArenaSurface(
-                contentRoot,
-                "HomeHeroStickerArena",
-                new Color(1f, 1f, 1f, 0.19f),
-                RescueStickerFactory.Palette.HotPink,
-                Vector2.zero);
-            var heroRect = hero.GetComponent<RectTransform>();
-            SetAnchors(heroRect, new Vector2(0.055f, 0.565f), new Vector2(0.945f, 0.795f));
+            var heroRect = RescueStickerFactory.CreateOpenHeroStage(contentRoot, "HomeHeroStage");
+            SetAnchors(heroRect, new Vector2(0.035f, EmojiWarVisualStyle.Layout.HeroStageBottom), new Vector2(0.965f, EmojiWarVisualStyle.Layout.HeroStageTop));
             AddEnterTarget(heroRect);
 
+            var titleStack = CreateRect("HeroTitleStack", heroRect);
+            SetAnchors(titleStack, new Vector2(0.18f, 0.21f), new Vector2(0.82f, 0.76f));
+
+            var modeBadge = RescueStickerFactory.CreateStatusChip(
+                titleStack,
+                "Ranked PvP",
+                new Color(0.22f, 0.16f, 0.52f, 0.82f),
+                EmojiWarVisualStyle.Colors.GoldLight);
+            SetAnchors(modeBadge.GetComponent<RectTransform>(), new Vector2(0.32f, 0.78f), new Vector2(0.68f, 0.92f));
+
             RescueStickerFactory.CreateLabel(
-                hero.transform,
-                "HeroCopy",
-                "Pick stickers. Ban one. Battle fast.",
-                23f,
+                titleStack,
+                "HeroTitleTopShadow",
+                "Emoji",
+                80f,
+                FontStyles.Bold,
+                new Color(0.16f, 0.10f, 0.34f, 0.88f),
+                TextAlignmentOptions.Center,
+                new Vector2(0.03f, 0.44f),
+                new Vector2(0.99f, 0.74f));
+            RescueStickerFactory.CreateLabel(
+                titleStack,
+                "HeroTitleTop",
+                "Emoji",
+                80f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
-                TextAlignmentOptions.Left,
-                new Vector2(0.055f, 0.08f),
-                new Vector2(0.46f, 0.30f));
+                TextAlignmentOptions.Center,
+                new Vector2(0.02f, 0.46f),
+                new Vector2(0.98f, 0.76f));
+
+            RescueStickerFactory.CreateLabel(
+                titleStack,
+                "HeroTitleBottomShadow",
+                "Clash",
+                98f,
+                FontStyles.Bold,
+                new Color(0.20f, 0.11f, 0.34f, 0.92f),
+                TextAlignmentOptions.Center,
+                new Vector2(0.03f, 0.14f),
+                new Vector2(0.99f, 0.50f));
+            RescueStickerFactory.CreateLabel(
+                titleStack,
+                "HeroTitleBottom",
+                "Clash",
+                98f,
+                FontStyles.Bold,
+                EmojiWarVisualStyle.Colors.GoldLight,
+                TextAlignmentOptions.Center,
+                new Vector2(0.02f, 0.18f),
+                new Vector2(0.98f, 0.52f));
+
+            RescueStickerFactory.CreateLabel(
+                titleStack,
+                "HeroCopy",
+                "Build a squad. Ban one. Clash fast.",
+                17f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SoftWhite,
+                TextAlignmentOptions.Center,
+                new Vector2(0.14f, 0.01f),
+                new Vector2(0.86f, 0.14f));
 
             var centerGlow = RescueStickerFactory.CreateBlob(
-                hero.transform,
+                heroRect,
                 "HeroCenterGlow",
                 RescueStickerFactory.Palette.SunnyYellow,
-                Vector2.zero,
-                new Vector2(178f, 178f),
-                0.18f);
-            centerGlow.transform.SetAsFirstSibling();
+                new Vector2(0f, -14f),
+                new Vector2(340f, 250f),
+                0.05f);
 
-            var battleBadge = RescueStickerFactory.CreateStatusChip(
-                hero.transform,
-                "Sticker Battle",
-                RescueStickerFactory.Palette.SunnyYellow,
-                RescueStickerFactory.Palette.InkPurple);
-            SetAnchors(battleBadge.GetComponent<RectTransform>(), new Vector2(0.39f, 0.43f), new Vector2(0.63f, 0.57f));
+            RescueStickerFactory.CreateBlob(
+                heroRect,
+                "HeroFloorGlow",
+                RescueStickerFactory.Palette.Aqua,
+                new Vector2(0f, -172f),
+                new Vector2(600f, 170f),
+                0.16f);
+
+            var stageRing = RescueStickerFactory.CreateBlob(
+                heroRect,
+                "HeroStageRing",
+                RescueStickerFactory.Palette.SoftWhite,
+                new Vector2(0f, -150f),
+                new Vector2(470f, 116f),
+                0.05f);
+            stageRing.transform.SetAsFirstSibling();
+
+            RescueStickerFactory.CreateBlob(
+                heroRect,
+                "HeroAuraLeft",
+                RescueStickerFactory.Palette.HotPink,
+                new Vector2(-176f, 34f),
+                new Vector2(220f, 248f),
+                0.06f);
+            RescueStickerFactory.CreateBlob(
+                heroRect,
+                "HeroAuraRight",
+                RescueStickerFactory.Palette.Aqua,
+                new Vector2(202f, 36f),
+                new Vector2(220f, 248f),
+                0.06f);
 
             var squad = ResolveCurrentSquad();
             var picks = new[]
@@ -192,15 +240,24 @@ namespace EmojiWar.Client.UI.Home
             };
             var positions = new[]
             {
-                new Vector2(0.24f, 0.67f),
-                new Vector2(0.44f, 0.73f),
-                new Vector2(0.68f, 0.67f),
-                new Vector2(0.83f, 0.44f),
-                new Vector2(0.60f, 0.30f),
-                new Vector2(0.37f, 0.36f)
+                new Vector2(0.15f, 0.76f),
+                new Vector2(0.86f, 0.73f),
+                new Vector2(0.06f, 0.46f),
+                new Vector2(0.93f, 0.43f),
+                new Vector2(0.29f, 0.12f),
+                new Vector2(0.74f, 0.11f)
             };
-            var sizes = new[] { 146f, 124f, 142f, 120f, 124f, 116f };
-            var tilts = new[] { -8f, 6f, 9f, -6f, 7f, -4f };
+            var heroSize = EmojiWarVisualStyle.Layout.LargeHeroAvatar.x;
+            var sizes = new[]
+            {
+                heroSize + 12f,
+                heroSize + 4f,
+                heroSize - 14f,
+                heroSize - 24f,
+                heroSize - 10f,
+                heroSize - 20f
+            };
+            var tilts = new[] { -10f, 6f, -14f, 10f, -5f, 9f };
 
             for (var index = 0; index < picks.Length; index++)
             {
@@ -208,8 +265,8 @@ namespace EmojiWar.Client.UI.Home
                 var key = EmojiIdUtility.ToApiId(unit);
                 var name = EmojiIdUtility.ToDisplayName(unit);
                 var color = UnitIconLibrary.GetPrimaryColor(key);
-                var avatar = RescueStickerFactory.CreateEmojiAvatar(
-                    hero.transform,
+                var avatar = RescueStickerFactory.CreateHeroFighter(
+                    heroRect,
                     key,
                     name,
                     color,
@@ -226,38 +283,47 @@ namespace EmojiWar.Client.UI.Home
 
         private void CreateCurrentSquad()
         {
-            var tray = RescueStickerFactory.CreateArenaSurface(
+            var tray = RescueStickerFactory.CreateGlassPanel(
                 contentRoot,
                 "HomeCurrentSquadTray",
-                new Color(1f, 1f, 1f, 0.23f),
-                RescueStickerFactory.Palette.Aqua,
-                Vector2.zero);
+                Vector2.zero,
+                strong: false);
             var trayRect = tray.GetComponent<RectTransform>();
-            SetAnchors(trayRect, new Vector2(0.055f, 0.355f), new Vector2(0.945f, 0.535f));
+            SetAnchors(trayRect, new Vector2(0.045f, EmojiWarVisualStyle.Layout.SquadStripBottom), new Vector2(0.955f, EmojiWarVisualStyle.Layout.SquadStripTop));
             AddEnterTarget(trayRect);
 
             RescueStickerFactory.CreateLabel(
                 tray.transform,
                 "Title",
-                "Current Squad",
-                22f,
+                "Sticker Squad",
+                24f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
                 TextAlignmentOptions.Left,
-                new Vector2(0.045f, 0.72f),
+                new Vector2(0.045f, 0.75f),
                 new Vector2(0.52f, 0.96f));
 
             var readyChip = RescueStickerFactory.CreateStatusChip(
                 tray.transform,
-                "6/6 READY",
-                RescueStickerFactory.Palette.Mint,
+                controller != null ? controller.GetRankedSquadStatusLabel() : "6/6 READY",
+                controller != null && controller.HasReadyRankedSquad()
+                    ? RescueStickerFactory.Palette.Mint
+                    : RescueStickerFactory.Palette.SunnyYellow,
                 RescueStickerFactory.Palette.InkPurple);
-            SetAnchors(readyChip.GetComponent<RectTransform>(), new Vector2(0.70f, 0.72f), new Vector2(0.955f, 0.96f));
+            SetAnchors(readyChip.GetComponent<RectTransform>(), new Vector2(0.72f, 0.74f), new Vector2(0.955f, 0.96f));
+
+            RescueStickerFactory.CreateBlob(
+                tray.transform,
+                "CurrentSquadRowGlow",
+                RescueStickerFactory.Palette.Aqua,
+                new Vector2(0f, -18f),
+                new Vector2(640f, 112f),
+                0.07f);
 
             var row = CreateRect("CurrentSquadRow", trayRect);
-            SetAnchors(row, new Vector2(0.02f, 0.04f), new Vector2(0.98f, 0.72f));
+            SetAnchors(row, new Vector2(0.018f, 0.04f), new Vector2(0.982f, 0.82f));
             var layout = row.gameObject.AddComponent<HorizontalLayoutGroup>();
-            layout.spacing = 6f;
+            layout.spacing = 2f;
             layout.childAlignment = TextAnchor.MiddleCenter;
             layout.childControlWidth = false;
             layout.childControlHeight = false;
@@ -270,7 +336,7 @@ namespace EmojiWar.Client.UI.Home
                 var unit = squad[index];
                 var key = EmojiIdUtility.ToApiId(unit);
                 var name = EmojiIdUtility.ToDisplayName(unit);
-                var mini = RescueStickerFactory.CreateMiniSquadSticker(
+                var mini = RescueStickerFactory.CreateFloatingMiniSquadSticker(
                     row,
                     name,
                     key,
@@ -278,62 +344,71 @@ namespace EmojiWar.Client.UI.Home
                     SquadMiniSize);
                 AddFixedLayout(mini, SquadMiniSize.x, SquadMiniSize.y);
                 NativeMotionKit.PopIn(this, mini.transform as RectTransform, null, 0.22f + index * 0.015f, 0.74f);
+                var visual = mini.transform.Find("FloatingStickerVisual") as RectTransform;
+                if (visual != null)
+                {
+                    var tilt = index switch
+                    {
+                        0 => -7f,
+                        1 => 4f,
+                        2 => -5f,
+                        3 => 6f,
+                        4 => -3f,
+                        _ => 5f
+                    };
+                    visual.localRotation = Quaternion.Euler(0f, 0f, tilt);
+                    NativeMotionKit.IdleBob(this, visual, 3f + index * 0.55f, 1.18f + index * 0.06f, true);
+                    NativeMotionKit.BreatheScale(this, visual, 0.020f, 1.26f + index * 0.05f, true);
+                }
             }
         }
 
-        private void CreatePrimaryCta()
+        private void CreateModeCtas()
         {
-            var button = RescueStickerFactory.CreateToyButton(
+            var rankedButton = RescueStickerFactory.CreatePrimaryGoldButton(
                 contentRoot,
                 "Play Ranked",
-                Color.Lerp(RescueStickerFactory.Palette.HotPink, RescueStickerFactory.Palette.Coral, 0.12f),
-                RescueStickerFactory.Palette.SoftWhite,
-                new Vector2(560f, 86f),
-                primary: true);
-            var rect = button.transform as RectTransform;
-            SetAnchors(rect, new Vector2(0.08f, 0.235f), new Vector2(0.92f, 0.325f));
-            PolishHomeButton(button, 30f, keepHighlight: true);
-            AddEnterTarget(rect);
-            NativeMotionKit.BreatheScale(this, rect, 0.025f, 1.10f, true);
-            WireButton(button, () => controller?.OpenBattlePlayers(), 0.07f);
+                new Vector2(560f, 90f));
+            var rankedRect = rankedButton.transform as RectTransform;
+            SetAnchors(rankedRect, new Vector2(0.05f, EmojiWarVisualStyle.Layout.PrimaryCtaBottom), new Vector2(0.95f, EmojiWarVisualStyle.Layout.PrimaryCtaTop));
+            PolishHomeButton(rankedButton, 34f, keepHighlight: true);
+            AddEnterTarget(rankedRect);
+            NativeMotionKit.BreatheScale(this, rankedRect, 0.025f, 1.05f, true);
+            WireButton(rankedButton, () => controller?.OpenBattlePlayers(), 0.07f);
         }
 
         private void CreateSecondaryActions()
         {
             var rootRect = CreateRect("HomeSecondaryActions", contentRoot);
-            SetAnchors(rootRect, new Vector2(0.075f, 0.135f), new Vector2(0.925f, 0.215f));
+            SetAnchors(rootRect, new Vector2(0.05f, EmojiWarVisualStyle.Layout.SecondaryActionsBottom), new Vector2(0.95f, EmojiWarVisualStyle.Layout.SecondaryActionsTop));
             AddEnterTarget(rootRect);
 
-            CreateSecondaryButton(rootRect, "Edit Squad", new Vector2(0f, 0f), new Vector2(0.235f, 1f), () => controller?.OpenDeckBuilder());
-            CreateSecondaryButton(rootRect, "Practice", new Vector2(0.255f, 0f), new Vector2(0.49f, 1f), () => controller?.OpenBattleBot());
-            CreateSecondaryButton(rootRect, "Codex", new Vector2(0.51f, 0f), new Vector2(0.745f, 1f), () => controller?.OpenCodex());
-            CreateSecondaryButton(rootRect, "Ranks", new Vector2(0.765f, 0f), new Vector2(1f, 1f), () => controller?.OpenLeaderboard());
+            CreateSecondaryButton(rootRect, "Quick Clash", new Vector2(0f, 0f), new Vector2(0.188f, 1f), () => controller?.OpenEmojiClash());
+            CreateSecondaryButton(rootRect, "Edit Squad", new Vector2(0.204f, 0f), new Vector2(0.392f, 1f), () => controller?.OpenDeckBuilder());
+            CreateSecondaryButton(rootRect, "Practice", new Vector2(0.408f, 0f), new Vector2(0.596f, 1f), () => controller?.OpenBattleBot());
+            CreateSecondaryButton(rootRect, "Codex", new Vector2(0.612f, 0f), new Vector2(0.80f, 1f), () => controller?.OpenCodex());
+            CreateSecondaryButton(rootRect, "Ranks", new Vector2(0.816f, 0f), new Vector2(1f, 1f), () => controller?.OpenLeaderboard());
         }
 
         private void CreateSecondaryButton(RectTransform parent, string label, Vector2 min, Vector2 max, Action action)
         {
-            var button = RescueStickerFactory.CreateToyButton(
+            var button = RescueStickerFactory.CreateSecondaryActionButton(
                 parent,
                 label,
-                RescueStickerFactory.Palette.ElectricPurple,
-                RescueStickerFactory.Palette.SoftWhite,
-                new Vector2(134f, 54f),
-                primary: false);
+                new Vector2(134f, 58f));
             SetAnchors(button.transform as RectTransform, min, max);
-            PolishHomeButton(button, 18f, keepHighlight: true);
+            PolishHomeButton(button, 18f, keepHighlight: false);
             WireButton(button, action, 0.06f);
         }
 
         private void CreateBottomNav()
         {
-            var nav = RescueStickerFactory.CreateArenaSurface(
+            var nav = RescueStickerFactory.CreateLightBottomNavPlate(
                 contentRoot,
                 "HomeBottomNav",
-                new Color(0.10f, 0.07f, 0.23f, 0.34f),
-                RescueStickerFactory.Palette.Aqua,
                 Vector2.zero);
             var navRect = nav.GetComponent<RectTransform>();
-            SetAnchors(navRect, new Vector2(0.08f, 0.035f), new Vector2(0.92f, 0.105f));
+            SetAnchors(navRect, new Vector2(0.05f, EmojiWarVisualStyle.Layout.BottomNavBottom), new Vector2(0.95f, EmojiWarVisualStyle.Layout.BottomNavTop));
             AddEnterTarget(navRect);
 
             var row = CreateRect("BottomNavRow", navRect);
@@ -346,22 +421,19 @@ namespace EmojiWar.Client.UI.Home
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
 
-            CreateNavButton(row, "Home", RescueStickerFactory.Palette.HotPink, () => { });
-            CreateNavButton(row, "Squad", RescueStickerFactory.Palette.ElectricPurple, () => controller?.OpenDeckBuilder());
-            CreateNavButton(row, "Codex", RescueStickerFactory.Palette.ElectricPurple, () => controller?.OpenCodex());
-            CreateNavButton(row, "Ranks", RescueStickerFactory.Palette.ElectricPurple, () => controller?.OpenLeaderboard());
+            CreateNavButton(row, "Home", EmojiWarVisualStyle.Colors.SecondaryActionDark, () => { });
+            CreateNavButton(row, "Squad", EmojiWarVisualStyle.Colors.SecondaryActionDark, () => controller?.OpenDeckBuilder());
+            CreateNavButton(row, "Codex", EmojiWarVisualStyle.Colors.SecondaryActionDark, () => controller?.OpenCodex());
+            CreateNavButton(row, "Ranks", EmojiWarVisualStyle.Colors.SecondaryActionDark, () => controller?.OpenLeaderboard());
         }
 
         private void CreateNavButton(RectTransform parent, string label, Color color, Action action)
         {
-            var button = RescueStickerFactory.CreateToyButton(
+            var button = RescueStickerFactory.CreateSecondaryActionButton(
                 parent,
                 label,
-                color,
-                RescueStickerFactory.Palette.SoftWhite,
-                new Vector2(120f, 42f),
-                primary: label == "Home");
-            PolishHomeButton(button, 16f, keepHighlight: label == "Home");
+                new Vector2(120f, 42f));
+            PolishHomeButton(button, 16f, keepHighlight: false);
             var layout = button.gameObject.AddComponent<LayoutElement>();
             layout.preferredHeight = 42f;
             layout.minHeight = 38f;
@@ -394,9 +466,15 @@ namespace EmojiWar.Client.UI.Home
                     var image = highlight.GetComponent<Image>();
                     if (image != null)
                     {
-                        image.color = new Color(1f, 1f, 1f, 0.16f);
+                        image.color = new Color(1f, 1f, 1f, 0.18f);
                     }
                 }
+            }
+
+            var buttonGraphic = button.GetComponent<Image>();
+            if (buttonGraphic != null && !keepHighlight)
+            {
+                buttonGraphic.color = Color.Lerp(buttonGraphic.color, RescueStickerFactory.Palette.DeepIndigo, 0.12f);
             }
 
             var label = button.GetComponentInChildren<TMP_Text>(true);
@@ -404,7 +482,9 @@ namespace EmojiWar.Client.UI.Home
             {
                 label.fontSize = labelSize;
                 label.alignment = TextAlignmentOptions.Center;
-                label.color = RescueStickerFactory.Palette.SoftWhite;
+                var image = button.GetComponent<Image>();
+                var usesGoldBody = image != null && image.color.r > 0.85f && image.color.g > 0.68f;
+                label.color = usesGoldBody ? EmojiWarVisualStyle.Colors.GoldText : RescueStickerFactory.Palette.SoftWhite;
             }
         }
 

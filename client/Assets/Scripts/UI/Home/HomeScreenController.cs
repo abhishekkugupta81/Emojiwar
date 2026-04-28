@@ -3,6 +3,7 @@ using System.Collections;
 using System.Linq;
 using EmojiWar.Client.Content;
 using EmojiWar.Client.Core;
+using EmojiWar.Client.Core.Decks;
 using EmojiWar.Client.Gameplay.Contracts;
 using EmojiWar.Client.UI.Common;
 using UnityEngine;
@@ -323,8 +324,21 @@ namespace EmojiWar.Client.UI.Home
             }
 
             LaunchSelections.BeginRankedMatchSelection();
+            if (TryGetConfirmedRankedSquad(out var rankedSquad))
+            {
+                LaunchSelections.SetPendingSquad(rankedSquad);
+                SceneManager.LoadScene(SceneNames.Match);
+                return;
+            }
+
             TryPrefillPendingSquad(6);
             SceneManager.LoadScene(SceneNames.DeckBuilder);
+        }
+
+        public void OpenEmojiClash()
+        {
+            LaunchSelections.BeginEmojiClash();
+            SceneManager.LoadScene(SceneNames.Match);
         }
 
         public void OpenResumeRankedMatch()
@@ -389,6 +403,16 @@ namespace EmojiWar.Client.UI.Home
             }
 
             AnimateSceneProfilePanel(!sceneProfilePanel.activeSelf);
+        }
+
+        public bool HasReadyRankedSquad()
+        {
+            return TryGetConfirmedRankedSquad(out _);
+        }
+
+        public string GetRankedSquadStatusLabel()
+        {
+            return HasReadyRankedSquad() ? "6/6 READY" : "BUILD FIRST";
         }
 
         private void RefreshView()
@@ -1985,6 +2009,32 @@ namespace EmojiWar.Client.UI.Home
                 .ToList();
 
             LaunchSelections.SetPendingSquad(prefill);
+        }
+
+        private bool TryGetConfirmedRankedSquad(out System.Collections.Generic.IReadOnlyList<EmojiId> squad)
+        {
+            squad = System.Array.Empty<EmojiId>();
+
+            var bootstrap = AppBootstrap.Instance;
+            if (bootstrap == null)
+            {
+                return false;
+            }
+
+            bootstrap.ActiveDeckService.EnsureInitialized(bootstrap.SessionState.UserId);
+            var activeDeck = bootstrap.ActiveDeckService.ActiveDeckEmojiIds;
+            if (!ActiveDeckService.ValidateDeck(activeDeck, out _))
+            {
+                return false;
+            }
+
+            if (bootstrap.ActiveDeckService.ShouldShowStarterPrompt)
+            {
+                return false;
+            }
+
+            squad = activeDeck.ToArray();
+            return true;
         }
 
         private void ApplyHomeSurfaceStyling()

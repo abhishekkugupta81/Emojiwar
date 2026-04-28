@@ -80,6 +80,16 @@ function display(emojiId: EmojiId): string {
   return EMOJI_DEFINITIONS[emojiId].displayName;
 }
 
+function teamOrientationHash(team: EmojiId[]): number {
+  const key = [...team].sort().join("|");
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (Math.imul(hash, 31) + key.charCodeAt(index)) | 0;
+  }
+
+  return hash;
+}
+
 export function selectBattleTeamFromDeck(deck: EmojiId[], desiredCount = 5): SelectedBattleTeam {
   if (deck.length <= desiredCount) {
     return { team: [...deck], benchedEmojiId: null };
@@ -114,11 +124,17 @@ export function buildDefaultFormation(team: EmojiId[]): Formation {
   });
 
   const placements: FormationPlacement[] = [];
+  const leftFirst = (teamOrientationHash(team) % 2) === 0;
+  const leftFront = leftFirst ? front[0] : front[2];
+  const rightFront = leftFirst ? front[2] : front[0];
+  const leftBack = leftFirst ? back[0] : back[1];
+  const rightBack = leftFirst ? back[1] : back[0];
+
   if (front[1]) placements.push({ slot: "front_center", emojiId: front[1] });
-  if (front[0]) placements.push({ slot: "front_left", emojiId: front[0] });
-  if (front[2]) placements.push({ slot: "front_right", emojiId: front[2] });
-  if (back[0]) placements.push({ slot: "back_left", emojiId: back[0] });
-  if (back[1]) placements.push({ slot: "back_right", emojiId: back[1] });
+  if (leftFront) placements.push({ slot: "front_left", emojiId: leftFront });
+  if (rightFront) placements.push({ slot: "front_right", emojiId: rightFront });
+  if (leftBack) placements.push({ slot: "back_left", emojiId: leftBack });
+  if (rightBack) placements.push({ slot: "back_right", emojiId: rightBack });
 
   const placed = new Set(placements.map((placement) => placement.emojiId));
   for (const emojiId of team) {
@@ -182,7 +198,66 @@ function slotPriority(slot: FormationSlot): number {
   }
 }
 
-function sortActionOrder(units: BattleUnitState[]): BattleUnitState[] {
+function slotColumn(slot: FormationSlot): number {
+  switch (slot) {
+    case "front_left":
+    case "back_left":
+      return -1;
+    case "front_center":
+      return 0;
+    case "front_right":
+    case "back_right":
+      return 1;
+  }
+}
+
+function cycleLanePriority(slot: FormationSlot, cycle: number): number {
+  const leftFirst = (cycle % 2) === 1;
+  switch (slot) {
+    case "front_center":
+      return 0;
+    case "front_left":
+      return leftFirst ? 1 : 2;
+    case "front_right":
+      return leftFirst ? 2 : 1;
+    case "back_left":
+      return leftFirst ? 3 : 4;
+    case "back_right":
+      return leftFirst ? 4 : 3;
+  }
+}
+
+function compareStableUnitTieBreak(left: BattleUnitState, right: BattleUnitState, cycle: number): number {
+  const attackDelta = right.attack - left.attack;
+  if (attackDelta !== 0) {
+    return attackDelta;
+  }
+
+  const hpDelta = right.hp - left.hp;
+  if (hpDelta !== 0) {
+    return hpDelta;
+  }
+
+  const speedDelta = effectiveSpeed(right) - effectiveSpeed(left);
+  if (speedDelta !== 0) {
+    return speedDelta;
+  }
+
+  const emojiDelta = left.emojiId.localeCompare(right.emojiId);
+  if (emojiDelta !== 0) {
+    return emojiDelta;
+  }
+
+  return cycleLanePriority(left.slot, cycle) - cycleLanePriority(right.slot, cycle);
+}
+
+function compareLaneDistance(actorSlot: FormationSlot, leftSlot: FormationSlot, rightSlot: FormationSlot): number {
+  const leftDistance = Math.abs(slotColumn(actorSlot) - slotColumn(leftSlot));
+  const rightDistance = Math.abs(slotColumn(actorSlot) - slotColumn(rightSlot));
+  return leftDistance - rightDistance;
+}
+
+function sortActionOrder(units: BattleUnitState[], cycle: number): BattleUnitState[] {
   return [...aliveUnits(units)].sort((left, right) => {
     const speedDelta = effectiveSpeed(right) - effectiveSpeed(left);
     if (speedDelta != 0) {
@@ -194,11 +269,11 @@ function sortActionOrder(units: BattleUnitState[]): BattleUnitState[] {
       return -rowDelta;
     }
 
-    return slotPriority(left.slot) - slotPriority(right.slot);
+    return compareStableUnitTieBreak(left, right, cycle);
   });
 }
 
-function findMostInjuredAlly(units: BattleUnitState[]): BattleUnitState | null {
+function findMostInjuredAlly(units: BattleUnitState[], cycle: number): BattleUnitState | null {
   const injured = aliveUnits(units).filter((unit) => unit.hp < unit.maxHp);
   if (injured.length === 0) {
     return null;
@@ -211,7 +286,7 @@ function findMostInjuredAlly(units: BattleUnitState[]): BattleUnitState | null {
       return rightMissing - leftMissing;
     }
 
-    return slotPriority(left.slot) - slotPriority(right.slot);
+    return compareStableUnitTieBreak(left, right, cycle);
   });
 
   return injured[0];
@@ -226,8 +301,24 @@ function hasMovementAbility(unit: BattleUnitState): boolean {
   return tags.includes("pull") || tags.includes("push") || tags.includes("phase");
 }
 
-function findDirtyAlly(units: BattleUnitState[]): BattleUnitState | null {
-  return aliveUnits(units).find((unit) => unit.burn > 0 || unit.poison > 0 || unit.bind > 0 || unit.stun > 0 || unit.freeze > 0) ?? null;
+function findDirtyAlly(units: BattleUnitState[], cycle: number): BattleUnitState | null {
+  const dirty = aliveUnits(units)
+    .filter((unit) => unit.burn > 0 || unit.poison > 0 || unit.bind > 0 || unit.stun > 0 || unit.freeze > 0)
+    .sort((left, right) => {
+      const leftSeverity = left.burn + left.poison + left.bind + left.stun + left.freeze;
+      const rightSeverity = right.burn + right.poison + right.bind + right.stun + right.freeze;
+      if (rightSeverity !== leftSeverity) {
+        return rightSeverity - leftSeverity;
+      }
+
+      if (left.hp !== right.hp) {
+        return left.hp - right.hp;
+      }
+
+      return compareStableUnitTieBreak(left, right, cycle);
+    });
+
+  return dirty[0] ?? null;
 }
 
 function firstAliveInSlots(units: BattleUnitState[], slots: FormationSlot[]): BattleUnitState[] {
@@ -236,7 +327,7 @@ function firstAliveInSlots(units: BattleUnitState[], slots: FormationSlot[]): Ba
     .filter((unit): unit is BattleUnitState => unit !== null);
 }
 
-function findPreferredBacklineTarget(units: BattleUnitState[]): BattleUnitState | null {
+function findPreferredBacklineTarget(actor: BattleUnitState, units: BattleUnitState[], cycle: number): BattleUnitState | null {
   const alive = aliveUnits(units).filter((unit) => !isFrontSlot(unit.slot));
   if (alive.length === 0) {
     return null;
@@ -244,19 +335,28 @@ function findPreferredBacklineTarget(units: BattleUnitState[]): BattleUnitState 
 
   const targetOrder: EmojiId[] = ["heart", "soap", "bomb", "plant", "mirror", "hole"];
   alive.sort((left, right) => {
+    const distanceDelta = compareLaneDistance(actor.slot, left.slot, right.slot);
+    if (distanceDelta !== 0) {
+      return distanceDelta;
+    }
+
     const leftIndex = targetOrder.indexOf(left.emojiId);
     const rightIndex = targetOrder.indexOf(right.emojiId);
     if (leftIndex != rightIndex) {
       return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
     }
 
-    return left.hp - right.hp;
+    if (left.hp !== right.hp) {
+      return left.hp - right.hp;
+    }
+
+    return compareStableUnitTieBreak(left, right, cycle);
   });
 
   return alive[0];
 }
 
-function findControlPriorityTarget(units: BattleUnitState[]): BattleUnitState | null {
+function findControlPriorityTarget(actor: BattleUnitState, units: BattleUnitState[], cycle: number): BattleUnitState | null {
   const alive = aliveUnits(units);
   const targetOrder: EmojiId[] = ["magnet", "ghost", "wind", "bomb", "heart", "plant"];
   alive.sort((left, right) => {
@@ -266,7 +366,33 @@ function findControlPriorityTarget(units: BattleUnitState[]): BattleUnitState | 
       return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
     }
 
-    return left.hp - right.hp;
+    const distanceDelta = compareLaneDistance(actor.slot, left.slot, right.slot);
+    if (distanceDelta !== 0) {
+      return distanceDelta;
+    }
+
+    if (left.hp !== right.hp) {
+      return left.hp - right.hp;
+    }
+
+    return compareStableUnitTieBreak(left, right, cycle);
+  });
+  return alive[0] ?? null;
+}
+
+function pickLaneTarget(actor: BattleUnitState, candidates: BattleUnitState[], cycle: number): BattleUnitState | null {
+  const alive = aliveUnits(candidates);
+  alive.sort((left, right) => {
+    const distanceDelta = compareLaneDistance(actor.slot, left.slot, right.slot);
+    if (distanceDelta !== 0) {
+      return distanceDelta;
+    }
+
+    if (left.hp !== right.hp) {
+      return left.hp - right.hp;
+    }
+
+    return compareStableUnitTieBreak(left, right, cycle);
   });
   return alive[0] ?? null;
 }
@@ -274,28 +400,29 @@ function findControlPriorityTarget(units: BattleUnitState[]): BattleUnitState | 
 function findTarget(
   actor: BattleUnitState,
   enemies: BattleUnitState[],
+  cycle: number,
   options?: { disablePhaseDive?: boolean },
 ): BattleUnitState | null {
   const frontline = firstAliveInSlots(enemies, FRONT_SLOTS);
   const backline = firstAliveInSlots(enemies, BACK_SLOTS);
 
   if (actor.emojiId === "ghost" && !options?.disablePhaseDive) {
-    return findPreferredBacklineTarget(enemies) ?? frontline[0] ?? backline[0] ?? null;
+    return findPreferredBacklineTarget(actor, enemies, cycle) ?? pickLaneTarget(actor, frontline, cycle) ?? pickLaneTarget(actor, backline, cycle) ?? null;
   }
 
   if (actor.emojiId === "lightning" || actor.emojiId === "chain") {
-    return findControlPriorityTarget(frontline.length > 0 ? frontline : enemies) ?? null;
+    return findControlPriorityTarget(actor, frontline.length > 0 ? frontline : enemies, cycle) ?? null;
   }
 
   if (actor.emojiId === "bomb") {
-    return frontline[0] ?? backline[0] ?? null;
+    return pickLaneTarget(actor, frontline, cycle) ?? pickLaneTarget(actor, backline, cycle) ?? null;
   }
 
   if (frontline.length > 0) {
-    return frontline[0];
+    return pickLaneTarget(actor, frontline, cycle);
   }
 
-  return backline[0] ?? null;
+  return pickLaneTarget(actor, backline, cycle);
 }
 
 function markDead(unit: BattleUnitState) {
@@ -344,7 +471,9 @@ function applyStatusTicks(cycle: number, teamA: BattleUnitState[], teamB: Battle
 }
 
 function advanceFrontline(cycle: number, team: BattleUnitState[], events: BattleEvent[]) {
-  const openFrontSlots = FRONT_SLOTS.filter((slot) => !team.some((unit) => unit.alive && unit.slot === slot));
+  const leftFirst = (cycle % 2) === 1;
+  const frontFillOrder: FormationSlot[] = ["front_center", leftFirst ? "front_left" : "front_right", leftFirst ? "front_right" : "front_left"];
+  const openFrontSlots = frontFillOrder.filter((slot) => !team.some((unit) => unit.alive && unit.slot === slot));
   if (openFrontSlots.length === 0) {
     return;
   }
@@ -373,7 +502,12 @@ function advanceFrontline(cycle: number, team: BattleUnitState[], events: Battle
           return hpDelta;
         }
 
-        return slotPriority(left.slot) - slotPriority(right.slot);
+        const distanceDelta = compareLaneDistance(openSlot, left.slot, right.slot);
+        if (distanceDelta !== 0) {
+          return distanceDelta;
+        }
+
+        return compareStableUnitTieBreak(left, right, cycle);
       });
 
     const candidate = candidates[0];
@@ -407,12 +541,19 @@ function applySplashDamage(cycle: number, actor: BattleUnitState, enemies: Battl
   }
 }
 
-function tryMoveToBack(target: BattleUnitState, team: BattleUnitState[]): boolean {
+function tryMoveToBack(target: BattleUnitState, team: BattleUnitState[], cycle: number): boolean {
   if (!isFrontSlot(target.slot)) {
     return false;
   }
 
-  const openSlot = BACK_SLOTS.find((slot) => !team.some((unit) => unit.alive && unit.slot === slot));
+  const preferredSlots: FormationSlot[] = target.slot === "front_left"
+    ? ["back_left", "back_right"]
+    : target.slot === "front_right"
+    ? ["back_right", "back_left"]
+    : (cycle % 2) === 1
+    ? ["back_left", "back_right"]
+    : ["back_right", "back_left"];
+  const openSlot = preferredSlots.find((slot) => !team.some((unit) => unit.alive && unit.slot === slot));
   if (!openSlot) {
     return false;
   }
@@ -421,12 +562,19 @@ function tryMoveToBack(target: BattleUnitState, team: BattleUnitState[]): boolea
   return true;
 }
 
-function tryMoveToFront(target: BattleUnitState, team: BattleUnitState[]): boolean {
+function tryMoveToFront(target: BattleUnitState, team: BattleUnitState[], cycle: number): boolean {
   if (isFrontSlot(target.slot)) {
     return false;
   }
 
-  const openSlot = FRONT_SLOTS.find((slot) => !team.some((unit) => unit.alive && unit.slot === slot));
+  const preferredSlots: FormationSlot[] = target.slot === "back_left"
+    ? ["front_left", "front_center", "front_right"]
+    : target.slot === "back_right"
+    ? ["front_right", "front_center", "front_left"]
+    : (cycle % 2) === 1
+    ? ["front_center", "front_left", "front_right"]
+    : ["front_center", "front_right", "front_left"];
+  const openSlot = preferredSlots.find((slot) => !team.some((unit) => unit.alive && unit.slot === slot));
   if (!openSlot) {
     return false;
   }
@@ -455,7 +603,7 @@ function resolveAttack(
   }
 
   if (actor.emojiId === "heart") {
-    const ally = findMostInjuredAlly(allies);
+    const ally = findMostInjuredAlly(allies, cycle);
     if (ally) {
       ally.hp = Math.min(ally.maxHp, ally.hp + 2);
       addEvent(events, cycle, "heal", actor, ally, REASON_CODES.HEART_STABILIZED_ALLY, `Heart healed ${display(ally.emojiId)} and stabilized the team.`);
@@ -464,7 +612,7 @@ function resolveAttack(
   }
 
   if (actor.emojiId === "soap") {
-    const ally = findDirtyAlly(allies);
+    const ally = findDirtyAlly(allies, cycle);
     if (ally) {
       ally.burn = 0;
       ally.poison = 0;
@@ -479,7 +627,13 @@ function resolveAttack(
   if (actor.emojiId === "shield") {
     const ally = aliveUnits(allies)
       .filter((unit) => isFrontSlot(unit.slot) && unit.shield <= 0)
-      .sort((left, right) => left.hp - right.hp)[0];
+      .sort((left, right) => {
+        if (left.hp !== right.hp) {
+          return left.hp - right.hp;
+        }
+
+        return compareStableUnitTieBreak(left, right, cycle);
+      })[0];
     if (ally) {
       ally.shield = 1;
       addEvent(events, cycle, "shield", actor, ally, REASON_CODES.SHIELD_BLOCKED_IMPACT, `Shield reinforced ${display(ally.emojiId)} for the next clash.`);
@@ -492,7 +646,7 @@ function resolveAttack(
   }
 
   const movementSuppressed = actor.bind > 0 && hasMovementAbility(actor);
-  const target = findTarget(actor, enemies, { disablePhaseDive: movementSuppressed });
+  const target = findTarget(actor, enemies, cycle, { disablePhaseDive: movementSuppressed });
   if (!target) {
     return;
   }
@@ -517,7 +671,33 @@ function resolveAttack(
     addEvent(events, cycle, "bind_lock", actor, target, REASON_CODES.CHAIN_BOUND_TARGET, entry.whyText);
   }
 
-  if (target.firstHitAvailable && actor.emojiId !== "lightning" && actor.emojiId !== "chain") {
+  const bypassesPhaseDive = entry.effectTags.some((tag) => tag === "delete" || tag === "disrupt" || tag === "bind" || tag === "stun" || tag === "freeze");
+  if (entry.outcomeType === "defender_advantage" && bypassesPhaseDive) {
+    if (entry.effectTags.includes("delete")) {
+      actor.hp = 0;
+    } else {
+      actor.hp -= Math.max(1, target.attack + 1);
+    }
+
+    if (entry.effectTags.includes("disrupt")) {
+      actor.disrupt = Math.max(actor.disrupt, 1);
+    }
+    if (entry.effectTags.includes("bind")) {
+      actor.bind = Math.max(actor.bind, 1);
+    }
+    if (entry.effectTags.includes("stun")) {
+      actor.stun = Math.max(actor.stun, 1);
+    }
+    if (entry.effectTags.includes("freeze")) {
+      actor.freeze = Math.max(actor.freeze, 1);
+    }
+
+    addEvent(events, cycle, "attack", target, actor, entry.reasonCode, entry.whyText);
+    markDead(actor);
+    return;
+  }
+
+  if (target.firstHitAvailable && actor.emojiId !== "lightning" && actor.emojiId !== "chain" && !bypassesPhaseDive) {
     target.firstHitAvailable = false;
     addEvent(events, cycle, "phase", actor, target, REASON_CODES.GHOST_PHASED_PAST_FRONT, `Ghost phased through ${display(target.emojiId)}'s opener.`);
     return;
@@ -542,7 +722,7 @@ function resolveAttack(
   }
 
   if (entry.effectTags.includes("push")) {
-    if (tryMoveToBack(target, enemies)) {
+    if (tryMoveToBack(target, enemies, cycle)) {
       addEvent(events, cycle, "push", actor, target, REASON_CODES.WIND_SCATTERED_FORMATION, entry.whyText);
     } else {
       target.disrupt = Math.max(target.disrupt, 1);
@@ -551,7 +731,7 @@ function resolveAttack(
   }
 
   if (entry.effectTags.includes("pull")) {
-    if (tryMoveToFront(target, enemies)) {
+    if (tryMoveToFront(target, enemies, cycle)) {
       addEvent(events, cycle, "pull", actor, target, REASON_CODES.MAGNET_PULLED_BOMB, entry.whyText);
     }
   }
@@ -827,7 +1007,7 @@ export function resolveBattle(input: BattleResolveInput): BattleResolveResult {
 
   while (!winner && cycle < MAX_CYCLES) {
     cycle += 1;
-    const order = sortActionOrder([...teamA, ...teamB]);
+    const order = sortActionOrder([...teamA, ...teamB], cycle);
     for (const actorRef of order) {
       const actor = [...teamA, ...teamB].find((unit) => unit.unitId === actorRef.unitId);
       if (!actor || !actor.alive) {

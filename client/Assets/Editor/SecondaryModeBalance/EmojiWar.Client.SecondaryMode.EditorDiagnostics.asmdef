@@ -1,0 +1,6 @@
+{
+  "name": "EmojiWar.Client.SecondaryMode.EditorDiagnostics",
+  "includePlatforms": [
+    "Editor"
+  ]
+}

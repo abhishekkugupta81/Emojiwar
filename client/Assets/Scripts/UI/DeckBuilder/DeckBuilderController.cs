@@ -257,6 +257,18 @@ namespace EmojiWar.Client.UI.DeckBuilder
 
         public string RescueContinueLabel => isRankedEntryFlow || isBotEntryFlow ? "Continue" : "Save Squad";
 
+        public string RescueTitle => isRankedEntryFlow
+            ? "Build Your Ranked Squad"
+            : isBotEntryFlow
+                ? "Build Your Practice Squad"
+                : "Build Your Squad";
+
+        public string RescueSubtitle => isRankedEntryFlow
+            ? "Build your ranked squad first"
+            : isBotEntryFlow
+                ? $"Pick {requiredSelectionCount} sticker fighters"
+                : $"Pick {requiredSelectionCount} sticker fighters";
+
         public bool TryAddEmoji(EmojiId emojiId)
         {
             if (workingSelection.Contains(emojiId))

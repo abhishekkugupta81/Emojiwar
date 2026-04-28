@@ -1,0 +1,9 @@
+{
+  "name": "EmojiWar.Client.EditorDiagnostics",
+  "references": [
+    "EmojiWar.Client.Gameplay"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ]
+}

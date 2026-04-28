@@ -136,7 +136,7 @@ namespace EmojiWar.Client.UI.DeckBuilder
             RescueStickerFactory.CreateLabel(
                 headerRoot,
                 "Title",
-                "Build Your Squad",
+                controller != null ? controller.RescueTitle : "Build Your Squad",
                 36f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
@@ -147,7 +147,7 @@ namespace EmojiWar.Client.UI.DeckBuilder
             RescueStickerFactory.CreateLabel(
                 headerRoot,
                 "Subtitle",
-                "Pick 6 sticker fighters",
+                controller != null ? controller.RescueSubtitle : "Pick 6 sticker fighters",
                 17f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,

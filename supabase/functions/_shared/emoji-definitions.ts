@@ -96,9 +96,9 @@ export const EMOJI_DEFINITIONS: Record<EmojiId, EmojiDefinition> = {
     role: "trick",
     primaryVerb: "delete",
     whySummary: "Hole deletes a narrow set of high-impact threats before they matter.",
-    counters: ["bomb", "lightning", "wind"],
-    failsAgainst: ["water", "plant", "ghost"],
-    stats: { hp: 5, attack: 2, speed: 4, preferredRow: "back", tags: ["delete", "anti_hazard"] },
+    counters: ["bomb", "lightning", "wind", "ghost"],
+    failsAgainst: ["water", "plant"],
+    stats: { hp: 5, attack: 2, speed: 5, preferredRow: "back", tags: ["delete", "anti_hazard"] },
   },
   shield: {
     id: "shield",
@@ -126,9 +126,9 @@ export const EMOJI_DEFINITIONS: Record<EmojiId, EmojiDefinition> = {
     role: "guard_support",
     primaryVerb: "cleanse",
     whySummary: "Soap resets messy status fights and keeps support comps alive.",
-    counters: ["snake", "fire", "chain"],
-    failsAgainst: ["ghost", "bomb", "plant"],
-    stats: { hp: 6, attack: 1, speed: 4, preferredRow: "back", tags: ["cleanse", "support"] },
+    counters: ["snake", "fire", "chain", "ghost"],
+    failsAgainst: ["bomb", "plant"],
+    stats: { hp: 7, attack: 1, speed: 4, preferredRow: "back", tags: ["cleanse", "support"] },
   },
   plant: {
     id: "plant",
@@ -166,9 +166,9 @@ export const EMOJI_DEFINITIONS: Record<EmojiId, EmojiDefinition> = {
     role: "trick",
     primaryVerb: "phase",
     whySummary: "Ghost slips past the frontline once and punishes fragile backline pieces.",
-    counters: ["heart", "soap", "bomb", "plant", "mirror"],
-    failsAgainst: ["chain", "lightning", "shield"],
-    stats: { hp: 5, attack: 3, speed: 8, preferredRow: "back", tags: ["phase", "dive", "backline_reach"] },
+    counters: ["heart", "plant", "mirror"],
+    failsAgainst: ["chain", "lightning", "shield", "bomb", "hole", "soap"],
+    stats: { hp: 5, attack: 2, speed: 6, preferredRow: "back", tags: ["phase", "dive", "backline_reach"] },
   },
   chain: {
     id: "chain",
@@ -178,7 +178,7 @@ export const EMOJI_DEFINITIONS: Record<EmojiId, EmojiDefinition> = {
     whySummary: "Chain shuts down movement-based combos and stabilizes chaotic battles.",
     counters: ["magnet", "wind", "ghost", "bomb"],
     failsAgainst: ["soap", "heart", "fire"],
-    stats: { hp: 8, attack: 2, speed: 5, preferredRow: "front", tags: ["bind", "control", "anti_combo"] },
+    stats: { hp: 7, attack: 2, speed: 5, preferredRow: "front", tags: ["bind", "control", "anti_combo"] },
   },
 };
 

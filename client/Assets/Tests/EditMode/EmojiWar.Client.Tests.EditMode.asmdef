@@ -1,0 +1,16 @@
+{
+  "name": "EmojiWar.Client.Tests.EditMode",
+  "references": [
+    "EmojiWar.Client.Core",
+    "EmojiWar.Client.Content",
+    "EmojiWar.Client.Gameplay",
+    "EmojiWar.Client.UI",
+    "EmojiWar.Client.EditorDiagnostics"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ]
+}

@@ -7,31 +7,77 @@ namespace EmojiWar.Client.UI.Common
     /// <summary>
     /// Deterministic unit icon provider for rescue UI.
     /// Final art can replace generated placeholders by adding sprites at
-    /// Resources/EmojiWar/UnitIcons/{normalized-key}.
+    /// Resources/EmojiWar/UnitIcons/{normalized-key} and
+    /// Resources/EmojiWar/FighterPortraits/{normalized-key}.
     /// </summary>
     public static class UnitIconLibrary
     {
         private const int IconSize = 256;
-        private static readonly Dictionary<string, Sprite> Cache = new Dictionary<string, Sprite>();
+        private const int PortraitSize = 320;
+        private static readonly Dictionary<string, Sprite> SmallIconCache = new Dictionary<string, Sprite>();
+        private static readonly Dictionary<string, Sprite> PortraitCache = new Dictionary<string, Sprite>();
 
         public static Sprite GetIconSprite(string unitIdOrName)
         {
+            return GetSmallIconSprite(unitIdOrName);
+        }
+
+        public static Sprite GetSmallIconSprite(string unitIdOrName)
+        {
             var key = NormalizeUnitKey(unitIdOrName);
-            if (Cache.TryGetValue(key, out var cached) && cached != null)
+            if (SmallIconCache.TryGetValue(key, out var cached) && cached != null)
             {
                 return cached;
             }
 
-            var resource = Resources.Load<Sprite>($"EmojiWar/UnitIcons/{key}");
+            var resource = LoadSmallIconResource(key);
             if (resource != null)
             {
-                Cache[key] = resource;
+                SmallIconCache[key] = resource;
                 return resource;
             }
 
             var generated = BuildGeneratedSprite(key);
-            Cache[key] = generated;
+            SmallIconCache[key] = generated;
             return generated;
+        }
+
+        public static Sprite GetPortraitSprite(string unitIdOrName)
+        {
+            var key = NormalizeUnitKey(unitIdOrName);
+            if (PortraitCache.TryGetValue(key, out var cached) && cached != null)
+            {
+                return cached;
+            }
+
+            var portrait = LoadPortraitResource(key);
+            if (portrait != null)
+            {
+                PortraitCache[key] = portrait;
+                return portrait;
+            }
+
+            var smallIcon = LoadSmallIconResource(key);
+            if (smallIcon != null)
+            {
+                PortraitCache[key] = smallIcon;
+                return smallIcon;
+            }
+
+            var generated = BuildGeneratedPortraitSprite(key);
+            PortraitCache[key] = generated;
+            return generated;
+        }
+
+        public static bool HasPortraitSprite(string unitIdOrName)
+        {
+            var key = NormalizeUnitKey(unitIdOrName);
+            return LoadPortraitResource(key) != null || LoadSmallIconResource(key) != null;
+        }
+
+        public static bool HasSmallIconSprite(string unitIdOrName)
+        {
+            return LoadSmallIconResource(NormalizeUnitKey(unitIdOrName)) != null;
         }
 
         public static Color GetPrimaryColor(string unitIdOrName)
@@ -186,8 +232,201 @@ namespace EmojiWar.Client.UI.Common
                     break;
             }
 
+            DecorateCharacter(texture, key);
+            ApplyStickerFraming(texture);
             texture.Apply();
             return Sprite.Create(texture, new Rect(0f, 0f, IconSize, IconSize), new Vector2(0.5f, 0.5f), 100f);
+        }
+
+        private static Sprite BuildGeneratedPortraitSprite(string key)
+        {
+            var source = BuildGeneratedSprite(key);
+            var texture = new Texture2D(PortraitSize, PortraitSize, TextureFormat.RGBA32, false)
+            {
+                name = $"GeneratedFighterPortrait_{key}",
+                hideFlags = HideFlags.HideAndDontSave
+            };
+
+            Clear(texture);
+            BlitSpriteScaled(
+                source,
+                texture,
+                new Rect(
+                    PortraitSize * 0.10f,
+                    PortraitSize * 0.08f,
+                    PortraitSize * 0.80f,
+                    PortraitSize * 0.80f));
+            texture.Apply();
+            return Sprite.Create(texture, new Rect(0f, 0f, PortraitSize, PortraitSize), new Vector2(0.5f, 0.5f), 100f);
+        }
+
+        private static Sprite LoadSmallIconResource(string key)
+        {
+            return Resources.Load<Sprite>($"EmojiWar/UnitIcons/{key}");
+        }
+
+        private static Sprite LoadPortraitResource(string key)
+        {
+            return Resources.Load<Sprite>($"EmojiWar/FighterPortraits/{key}");
+        }
+
+        private static void ApplyStickerFraming(Texture2D texture)
+        {
+            var source = texture.GetPixels32();
+            var framed = new Color32[source.Length];
+            var shadow = new Color32(0x23, 0x19, 0x52, 0x64);
+            var outline = new Color32(0xFF, 0xFF, 0xFF, 0xFF);
+
+            for (var y = 0; y < IconSize; y++)
+            {
+                for (var x = 0; x < IconSize; x++)
+                {
+                    var index = y * IconSize + x;
+                    if (source[index].a <= 0)
+                    {
+                        continue;
+                    }
+
+                    BlendPixel(framed, x + 6, y - 8, shadow);
+                }
+            }
+
+            for (var y = 0; y < IconSize; y++)
+            {
+                for (var x = 0; x < IconSize; x++)
+                {
+                    var index = y * IconSize + x;
+                    if (source[index].a <= 0)
+                    {
+                        continue;
+                    }
+
+                    for (var oy = -6; oy <= 6; oy++)
+                    {
+                        for (var ox = -6; ox <= 6; ox++)
+                        {
+                            if ((ox * ox) + (oy * oy) > 34)
+                            {
+                                continue;
+                            }
+
+                            var targetX = x + ox;
+                            var targetY = y + oy;
+                            if (targetX < 0 || targetX >= IconSize || targetY < 0 || targetY >= IconSize)
+                            {
+                                continue;
+                            }
+
+                            var targetIndex = targetY * IconSize + targetX;
+                            if (source[targetIndex].a > 0)
+                            {
+                                continue;
+                            }
+
+                            BlendPixel(framed, targetX, targetY, outline);
+                        }
+                    }
+                }
+            }
+
+            for (var y = 0; y < IconSize; y++)
+            {
+                for (var x = 0; x < IconSize; x++)
+                {
+                    var index = y * IconSize + x;
+                    if (source[index].a <= 0)
+                    {
+                        continue;
+                    }
+
+                    BlendPixel(framed, x, y, source[index]);
+                }
+            }
+
+            texture.SetPixels32(framed);
+        }
+
+        private static void DecorateCharacter(Texture2D texture, string key)
+        {
+            switch (key)
+            {
+                case "fire":
+                    DrawMascotPose(texture, new Vector2(128f, 150f), 1.05f, Color.white, new Color32(0x22, 0x15, 0x2F, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 164f), 58f, 46f, new Color32(0x9A, 0x34, 0x14, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 214f), 38f, new Color32(0x8A, 0x28, 0x13, 0xFF));
+                    break;
+                case "water":
+                    DrawMascotPose(texture, new Vector2(126f, 154f), 0.96f, Color.white, new Color32(0x16, 0x21, 0x5C, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 168f), 54f, 42f, new Color32(0x0D, 0x73, 0xD8, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 214f), 30f, new Color32(0x0B, 0x77, 0xD4, 0xFF));
+                    break;
+                case "lightning":
+                    DrawMascotPose(texture, new Vector2(130f, 150f), 0.92f, Color.white, new Color32(0x26, 0x1A, 0x22, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(130f, 162f), 50f, 40f, new Color32(0xD3, 0x8B, 0x12, 0xFF));
+                    DrawKickFeet(texture, new Vector2(126f, 208f), 30f, new Color32(0xCC, 0x89, 0x16, 0xFF));
+                    break;
+                case "shield":
+                    DrawMascotPose(texture, new Vector2(128f, 132f), 0.88f, Color.white, new Color32(0x1C, 0x17, 0x44, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 146f), 54f, 42f, new Color32(0x2D, 0x46, 0x98, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 212f), 32f, new Color32(0x2B, 0x3C, 0x8A, 0xFF));
+                    break;
+                case "heart":
+                    DrawMascotPose(texture, new Vector2(128f, 146f), 0.94f, Color.white, new Color32(0x4B, 0x14, 0x3B, 0xFF), openMouth: true, eyebrowsSharp: false, wink: true, cheeky: true);
+                    DrawPunchArms(texture, new Vector2(126f, 162f), 56f, 42f, new Color32(0xD8, 0x3D, 0x7A, 0xFF));
+                    DrawKickFeet(texture, new Vector2(130f, 214f), 34f, new Color32(0xCA, 0x3A, 0x74, 0xFF));
+                    break;
+                case "wind":
+                    DrawMascotPose(texture, new Vector2(128f, 142f), 0.90f, Color.white, new Color32(0x1C, 0x3A, 0x66, 0xFF), openMouth: true, eyebrowsSharp: false, wink: true, cheeky: true);
+                    DrawPunchArms(texture, new Vector2(130f, 158f), 54f, 40f, new Color32(0x39, 0xA5, 0xD0, 0xFF));
+                    DrawKickFeet(texture, new Vector2(126f, 206f), 28f, new Color32(0x3C, 0xA7, 0xD4, 0xFF));
+                    break;
+                case "ice":
+                    DrawMascotPose(texture, new Vector2(128f, 142f), 0.88f, Color.white, new Color32(0x1D, 0x4F, 0x86, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 156f), 52f, 40f, new Color32(0x47, 0xB5, 0xED, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 206f), 28f, new Color32(0x45, 0xA8, 0xE0, 0xFF));
+                    break;
+                case "magnet":
+                    DrawMascotPose(texture, new Vector2(128f, 146f), 0.82f, Color.white, new Color32(0x21, 0x16, 0x44, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 160f), 54f, 42f, new Color32(0x34, 0x31, 0x68, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 214f), 30f, new Color32(0x34, 0x31, 0x68, 0xFF));
+                    break;
+                case "bomb":
+                    DrawMascotPose(texture, new Vector2(122f, 142f), 0.88f, Color.white, new Color32(0x1C, 0x17, 0x2F, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(124f, 156f), 56f, 42f, new Color32(0x31, 0x2D, 0x4F, 0xFF));
+                    DrawKickFeet(texture, new Vector2(124f, 212f), 30f, new Color32(0x31, 0x2D, 0x4F, 0xFF));
+                    break;
+                case "snake":
+                    DrawMascotPose(texture, new Vector2(168f, 84f), 0.72f, Color.white, new Color32(0x1E, 0x20, 0x17, 0xFF), openMouth: false, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawTongue(texture, new Vector2(188f, 97f), 22f, new Color32(0xFF, 0x5B, 0x6E, 0xFF));
+                    break;
+                case "hole":
+                    DrawMascotPose(texture, new Vector2(128f, 122f), 0.78f, Color.white, new Color32(0xF4, 0xF1, 0xFF, 0xFF), openMouth: false, eyebrowsSharp: true, wink: false, cheeky: false);
+                    break;
+                case "plant":
+                    DrawMascotPose(texture, new Vector2(128f, 92f), 0.80f, Color.white, new Color32(0x1B, 0x37, 0x16, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: true);
+                    DrawPunchArms(texture, new Vector2(128f, 108f), 38f, 32f, new Color32(0x2E, 0x8D, 0x2D, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 166f), 24f, new Color32(0x2E, 0x8D, 0x2D, 0xFF));
+                    break;
+                case "mirror":
+                    DrawMascotPose(texture, new Vector2(128f, 120f), 0.82f, Color.white, new Color32(0x1C, 0x3C, 0x6B, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 132f), 46f, 32f, new Color32(0x53, 0x7E, 0xA5, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 188f), 22f, new Color32(0x53, 0x7E, 0xA5, 0xFF));
+                    break;
+                case "soap":
+                    DrawMascotPose(texture, new Vector2(130f, 140f), 0.84f, Color.white, new Color32(0x5D, 0x2B, 0x62, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(130f, 154f), 48f, 34f, new Color32(0xB8, 0x79, 0xC1, 0xFF));
+                    DrawKickFeet(texture, new Vector2(130f, 206f), 24f, new Color32(0xB8, 0x79, 0xC1, 0xFF));
+                    break;
+                case "ghost":
+                    DrawMascotPose(texture, new Vector2(128f, 122f), 0.88f, Color.white, new Color32(0x2A, 0x1D, 0x5A, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 138f), 44f, 34f, new Color32(0xD8, 0xD6, 0xFA, 0xFF));
+                    break;
+                case "chain":
+                    DrawMascotPose(texture, new Vector2(128f, 130f), 0.78f, Color.white, new Color32(0x22, 0x22, 0x33, 0xFF), openMouth: true, eyebrowsSharp: true, wink: false, cheeky: false);
+                    DrawPunchArms(texture, new Vector2(128f, 144f), 48f, 34f, new Color32(0x6D, 0x74, 0x90, 0xFF));
+                    DrawKickFeet(texture, new Vector2(128f, 196f), 24f, new Color32(0x6D, 0x74, 0x90, 0xFF));
+                    break;
+            }
         }
 
         private static void DrawFire(Texture2D texture)
@@ -367,6 +606,89 @@ namespace EmojiWar.Client.UI.Common
             DrawThickLine(texture, new Vector2(116f, 128f), new Vector2(140f, 128f), 12f, Color.white);
         }
 
+        private static void DrawMascotPose(
+            Texture2D texture,
+            Vector2 faceCenter,
+            float scale,
+            Color eyeColor,
+            Color browColor,
+            bool openMouth,
+            bool eyebrowsSharp,
+            bool wink,
+            bool cheeky)
+        {
+            var eyeOffsetX = 20f * scale;
+            var eyeOffsetY = -2f * scale;
+            var eyeRadius = 10f * scale;
+            var browWidth = 26f * scale;
+            var browThickness = 5f * scale;
+            var mouthY = 18f * scale;
+
+            DrawCircle(texture, faceCenter + new Vector2(-eyeOffsetX, eyeOffsetY), eyeRadius, eyeColor);
+            if (wink)
+            {
+                DrawThickLine(texture, faceCenter + new Vector2(eyeOffsetX - 8f * scale, eyeOffsetY), faceCenter + new Vector2(eyeOffsetX + 10f * scale, eyeOffsetY + 2f * scale), 4f * scale, eyeColor);
+            }
+            else
+            {
+                DrawCircle(texture, faceCenter + new Vector2(eyeOffsetX, eyeOffsetY), eyeRadius, eyeColor);
+            }
+
+            var leftBrowA = faceCenter + new Vector2(-eyeOffsetX - browWidth * 0.35f, -18f * scale);
+            var leftBrowB = faceCenter + new Vector2(-eyeOffsetX + browWidth * 0.35f, eyebrowsSharp ? -24f * scale : -20f * scale);
+            var rightBrowA = faceCenter + new Vector2(eyeOffsetX - browWidth * 0.35f, eyebrowsSharp ? -24f * scale : -20f * scale);
+            var rightBrowB = faceCenter + new Vector2(eyeOffsetX + browWidth * 0.35f, -18f * scale);
+            DrawThickLine(texture, leftBrowA, leftBrowB, browThickness, browColor);
+            DrawThickLine(texture, rightBrowA, rightBrowB, browThickness, browColor);
+
+            if (openMouth)
+            {
+                DrawEllipse(texture, faceCenter + new Vector2(0f, mouthY), new Vector2(14f * scale, 12f * scale), new Color32(0x1E, 0x17, 0x2A, 0xFF));
+                DrawEllipse(texture, faceCenter + new Vector2(0f, mouthY + 4f * scale), new Vector2(8f * scale, 4f * scale), new Color32(0xFF, 0x77, 0x8D, 0xFF));
+            }
+            else
+            {
+                DrawThickLine(texture, faceCenter + new Vector2(-10f * scale, mouthY), faceCenter + new Vector2(10f * scale, mouthY + 3f * scale), 4f * scale, browColor);
+            }
+
+            if (cheeky)
+            {
+                DrawCircle(texture, faceCenter + new Vector2(-34f * scale, 12f * scale), 6f * scale, new Color32(0xFF, 0xB7, 0xD4, 0xAA));
+                DrawCircle(texture, faceCenter + new Vector2(32f * scale, 14f * scale), 6f * scale, new Color32(0xFF, 0xB7, 0xD4, 0xAA));
+            }
+        }
+
+        private static void DrawPunchArms(Texture2D texture, Vector2 center, float reach, float drop, Color limbColor)
+        {
+            var leftShoulder = center + new Vector2(-26f, -6f);
+            var rightShoulder = center + new Vector2(26f, -6f);
+            var leftFist = center + new Vector2(-reach, drop * 0.12f);
+            var rightFist = center + new Vector2(reach, -drop * 0.05f);
+            DrawThickLine(texture, leftShoulder, leftFist, 12f, limbColor);
+            DrawThickLine(texture, rightShoulder, rightFist, 12f, limbColor);
+            DrawCircle(texture, leftFist, 14f, limbColor);
+            DrawCircle(texture, rightFist, 14f, limbColor);
+        }
+
+        private static void DrawKickFeet(Texture2D texture, Vector2 center, float spread, Color limbColor)
+        {
+            var leftHip = center + new Vector2(-14f, -6f);
+            var rightHip = center + new Vector2(14f, -6f);
+            var leftFoot = center + new Vector2(-spread, 20f);
+            var rightFoot = center + new Vector2(spread * 0.72f, 18f);
+            DrawThickLine(texture, leftHip, leftFoot, 12f, limbColor);
+            DrawThickLine(texture, rightHip, rightFoot, 12f, limbColor);
+            DrawCircle(texture, leftFoot, 11f, limbColor);
+            DrawCircle(texture, rightFoot, 11f, limbColor);
+        }
+
+        private static void DrawTongue(Texture2D texture, Vector2 start, float length, Color tongueColor)
+        {
+            DrawThickLine(texture, start, start + new Vector2(length, 2f), 4f, tongueColor);
+            DrawThickLine(texture, start + new Vector2(length, 2f), start + new Vector2(length + 7f, -2f), 2f, tongueColor);
+            DrawThickLine(texture, start + new Vector2(length, 2f), start + new Vector2(length + 7f, 6f), 2f, tongueColor);
+        }
+
         private static void DrawDroplet(Texture2D texture, Vector2 center, float radius, Color primary, Color secondary)
         {
             FillPolygon(texture, new[]
@@ -525,9 +847,9 @@ namespace EmojiWar.Client.UI.Common
 
         private static void Clear(Texture2D texture)
         {
-            for (var y = 0; y < IconSize; y++)
+            for (var y = 0; y < texture.height; y++)
             {
-                for (var x = 0; x < IconSize; x++)
+                for (var x = 0; x < texture.width; x++)
                 {
                     texture.SetPixel(x, y, Color.clear);
                 }
@@ -536,7 +858,7 @@ namespace EmojiWar.Client.UI.Common
 
         private static void BlendPixel(Texture2D texture, int x, int y, Color source)
         {
-            if (x < 0 || x >= IconSize || y < 0 || y >= IconSize)
+            if (x < 0 || x >= texture.width || y < 0 || y >= texture.height)
             {
                 return;
             }
@@ -552,6 +874,74 @@ namespace EmojiWar.Client.UI.Common
             var color = (source * source.a + destination * destination.a * (1f - source.a)) / alpha;
             color.a = alpha;
             texture.SetPixel(x, y, color);
+        }
+
+        private static void BlendPixel(Color32[] pixels, int x, int y, Color32 source)
+        {
+            if (x < 0 || x >= IconSize || y < 0 || y >= IconSize)
+            {
+                return;
+            }
+
+            var index = (y * IconSize) + x;
+            var destination = pixels[index];
+            var srcA = source.a / 255f;
+            var dstA = destination.a / 255f;
+            var outA = srcA + (dstA * (1f - srcA));
+            if (outA <= 0f)
+            {
+                pixels[index] = new Color32(0, 0, 0, 0);
+                return;
+            }
+
+            var src = (Color)source;
+            var dst = (Color)destination;
+            var outColor = ((src * srcA) + (dst * dstA * (1f - srcA))) / outA;
+            outColor.a = outA;
+            pixels[index] = outColor;
+        }
+
+        private static void BlitSpriteScaled(Sprite source, Texture2D destination, Rect destinationRect)
+        {
+            if (source == null || destination == null)
+            {
+                return;
+            }
+
+            var sourceTexture = source.texture;
+            if (sourceTexture == null)
+            {
+                return;
+            }
+
+            var sourceRect = source.rect;
+            var minX = Mathf.RoundToInt(destinationRect.xMin);
+            var maxX = Mathf.RoundToInt(destinationRect.xMax);
+            var minY = Mathf.RoundToInt(destinationRect.yMin);
+            var maxY = Mathf.RoundToInt(destinationRect.yMax);
+            for (var y = minY; y < maxY; y++)
+            {
+                var v = Mathf.InverseLerp(minY, maxY - 1f, y);
+                var sourceY = Mathf.Clamp(
+                    Mathf.RoundToInt(sourceRect.yMin + v * (sourceRect.height - 1f)),
+                    Mathf.RoundToInt(sourceRect.yMin),
+                    Mathf.RoundToInt(sourceRect.yMax - 1f));
+                for (var x = minX; x < maxX; x++)
+                {
+                    var u = Mathf.InverseLerp(minX, maxX - 1f, x);
+                    var sourceX = Mathf.Clamp(
+                        Mathf.RoundToInt(sourceRect.xMin + u * (sourceRect.width - 1f)),
+                        Mathf.RoundToInt(sourceRect.xMin),
+                        Mathf.RoundToInt(sourceRect.xMax - 1f));
+                    var color = sourceTexture.GetPixel(sourceX, sourceY);
+                    if (color.a <= 0f)
+                    {
+                        continue;
+                    }
+
+                    BlendPixel(destination, x, y, color);
+                }
+            }
         }
     }
 }

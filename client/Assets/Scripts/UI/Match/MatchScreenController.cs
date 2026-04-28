@@ -6,6 +6,7 @@ using System.Text;
 using EmojiWar.Client.Content;
 using EmojiWar.Client.Core;
 using EmojiWar.Client.Gameplay.Contracts;
+using EmojiWar.Client.Gameplay.Clash;
 using EmojiWar.Client.UI.Common;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -24,6 +25,10 @@ namespace EmojiWar.Client.UI.Match
         private const bool UseSlideBackground = false;
         private const bool UsePrefabFirstV2Layout = true;
         private const bool UseRescueBlindBan = true;
+        private const bool UseRescueFormation = true;
+        private const bool UseRescueBattlePresentation = true;
+        private const bool UseRescueResult = true;
+        private const float BlindBanRevealInterstitialSeconds = 1.35f;
 
         private static readonly string[] FormationSlotOrder =
         {
@@ -104,8 +109,18 @@ namespace EmojiWar.Client.UI.Match
         private string formationDraftKey = string.Empty;
         private FormationContext activeFormationContext = FormationContext.None;
         private BlindBanRescueScreen rescueBlindBanScreen;
+        private FormationRescueScreen rescueFormationScreen;
+        private BattlePresentationRescueScreen rescueBattlePresentationScreen;
+        private ResultRescueScreen rescueResultScreen;
+        private EmojiClashRescueScreen rescueEmojiClashScreen;
         private string rescueSelectedBanId = string.Empty;
         private string rescuePendingLockedBanId = string.Empty;
+        private string[] rescueFormationAssignments = Array.Empty<string>();
+        private Coroutine rescueBanRevealRoutine;
+        private Coroutine emojiClashResolveRoutine;
+        private EmojiClashController emojiClashController;
+        private string rescueActiveBanRevealKey = string.Empty;
+        private string rescueCompletedBanRevealKey = string.Empty;
         private bool v2FoundationReady = true;
         private string v2FoundationMessage = string.Empty;
         // V2 recovery milestone: Match is prefab-first only.
@@ -165,6 +180,11 @@ namespace EmojiWar.Client.UI.Match
         private void OnDisable()
         {
             HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            HideEmojiClashRescue();
+            StopBanRevealRoutine();
+            StopEmojiClashResolveRoutine();
             StopPolling();
             StopUiRefresh();
             StopReplay();
@@ -876,7 +896,35 @@ namespace EmojiWar.Client.UI.Match
                 yield break;
             }
 
+            if (selectedMode == LaunchSelections.EmojiClashLocal)
+            {
+                yield return BeginEmojiClashLocal();
+                yield break;
+            }
+
             yield return BeginBotMatch(selectedMode);
+        }
+
+        private IEnumerator BeginEmojiClashLocal()
+        {
+            currentPanelState = MatchUiPanelState.Ban;
+            SetHeader(
+                "Emoji Clash",
+                "Quick Play - 5 Turns",
+                "Pick one emoji each turn. Reveals resolve together. No randomness.");
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+
+            EnsureEmojiClashRescueScreen();
+            if (rescueEmojiClashScreen == null)
+            {
+                ShowError("Emoji Clash", "Screen unavailable.", "Could not mount the Emoji Clash rescue screen.");
+                yield break;
+            }
+
+            emojiClashController = new EmojiClashController();
+            emojiClashController.StartEmojiClash();
+            RenderEmojiClashTurn();
         }
 
         private IEnumerator BeginBotMatch(string mode)
@@ -1088,6 +1136,13 @@ namespace EmojiWar.Client.UI.Match
 
             if (IsFormationPhase(currentPvpMatch))
             {
+                if (ShouldShowBanRevealBeforeFormation(currentPvpMatch))
+                {
+                    ShowBanRevealBeforeFormation();
+                    EnsurePolling();
+                    return;
+                }
+
                 if (!HasPlayerFinalTeam(currentPvpMatch))
                 {
                     ShowSyncingFormation();
@@ -1135,6 +1190,8 @@ namespace EmojiWar.Client.UI.Match
         private void ShowQueuedState(QueueOrJoinMatchResponseDto response)
         {
             HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
             if (response == null)
             {
                 ShowError("Ranked PvP", "Queue state unavailable.", "No queue snapshot is loaded.");
@@ -1152,6 +1209,8 @@ namespace EmojiWar.Client.UI.Match
 
         private void ShowBanPhase()
         {
+            HideFormationRescue();
+            HideResultRescue();
             if (currentPvpMatch == null)
             {
                 ShowError("Ranked PvP", "Ban state unavailable.", "Match snapshot is missing.");
@@ -1175,6 +1234,8 @@ namespace EmojiWar.Client.UI.Match
 
         private void ShowWaitingForOpponentBan()
         {
+            HideFormationRescue();
+            HideResultRescue();
             if (currentPvpMatch == null)
             {
                 ShowError("Ranked PvP", "Ban wait state unavailable.", "Match snapshot is missing.");
@@ -1242,6 +1303,7 @@ namespace EmojiWar.Client.UI.Match
             rescueBlindBanScreen.Bind(
                 enemyUnits,
                 playerUnits,
+                ResolveBlindBanVisibilityMode(),
                 selectedBan,
                 lockedBan,
                 currentPvpMatch.playerBannedEmojiId,
@@ -1279,6 +1341,8 @@ namespace EmojiWar.Client.UI.Match
 
         private void HideBlindBanRescue()
         {
+            StopBanRevealRoutine();
+
             if (rescueBlindBanScreen == null)
             {
                 return;
@@ -1325,14 +1389,79 @@ namespace EmojiWar.Client.UI.Match
             return 27;
         }
 
+        private BlindBanRescueScreen.BlindBanVisibilityMode ResolveBlindBanVisibilityMode()
+        {
+            // Ranked PvP must not reveal opponent cards during blind ban.
+            // Testing reveal mode is reserved for local/dev-only flows.
+            return BlindBanRescueScreen.BlindBanVisibilityMode.ProductionHiddenOpponentCards;
+        }
+
         private static string NormalizeOptionalUnitKey(string value)
         {
             return string.IsNullOrWhiteSpace(value) ? string.Empty : UnitIconLibrary.NormalizeUnitKey(value);
         }
 
+        private void ShowBanRevealBeforeFormation()
+        {
+            if (currentPvpMatch == null)
+            {
+                return;
+            }
+
+            currentPanelState = MatchUiPanelState.Waiting;
+            if (!TryRenderBlindBanRescue(locked: true))
+            {
+                ShowPvpFormationPhase();
+                return;
+            }
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+
+            var revealKey = BuildBanRevealKey(currentPvpMatch);
+            if (string.Equals(revealKey, rescueActiveBanRevealKey, StringComparison.Ordinal) &&
+                rescueBanRevealRoutine != null)
+            {
+                return;
+            }
+
+            StopBanRevealRoutine();
+            rescueActiveBanRevealKey = revealKey;
+            rescueBanRevealRoutine = StartCoroutine(AdvanceToFormationAfterBanReveal(revealKey));
+        }
+
+        private IEnumerator AdvanceToFormationAfterBanReveal(string revealKey)
+        {
+            yield return new WaitForSeconds(BlindBanRevealInterstitialSeconds);
+
+            rescueCompletedBanRevealKey = revealKey;
+            rescueActiveBanRevealKey = string.Empty;
+            rescueBanRevealRoutine = null;
+
+            if (currentPvpMatch != null)
+            {
+                SafeRenderCurrentPvpState("post ban reveal interstitial");
+            }
+        }
+
+        private void StopBanRevealRoutine()
+        {
+            if (rescueBanRevealRoutine == null)
+            {
+                rescueActiveBanRevealKey = string.Empty;
+                return;
+            }
+
+            StopCoroutine(rescueBanRevealRoutine);
+            rescueBanRevealRoutine = null;
+            rescueActiveBanRevealKey = string.Empty;
+        }
+
         private void ShowSyncingOpponentDeck()
         {
             HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
             currentPanelState = MatchUiPanelState.Waiting;
             SetHeader(
                 "Ranked PvP",
@@ -1345,6 +1474,8 @@ namespace EmojiWar.Client.UI.Match
         private void ShowSyncingFormation()
         {
             HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
             currentPanelState = MatchUiPanelState.Waiting;
             var timeoutLine = BuildTimeoutLine(currentPvpMatch, "Formation timeout in");
             var details = string.IsNullOrWhiteSpace(timeoutLine)
@@ -1361,6 +1492,7 @@ namespace EmojiWar.Client.UI.Match
         private void ShowPvpFormationPhase()
         {
             HideBlindBanRescue();
+            HideResultRescue();
             if (currentPvpMatch == null)
             {
                 ShowError("Ranked PvP", "Formation state unavailable.", "Match snapshot is missing.");
@@ -1371,6 +1503,11 @@ namespace EmojiWar.Client.UI.Match
             activeFormationContext = FormationContext.Pvp;
             var team = currentPvpMatch.playerFinalTeam ?? Array.Empty<string>();
             EnsureFormationDraft($"pvp:{currentMatchId}:{string.Join(",", team)}", team);
+            if (UseRescueFormation && TryRenderFormationRescue(locked: false))
+            {
+                return;
+            }
+
             ShowFormationBuilder(
                 "Ranked PvP",
                 "Step 3 of 4 • Formation",
@@ -1382,6 +1519,7 @@ namespace EmojiWar.Client.UI.Match
         private void ShowBotFormationPhase()
         {
             HideBlindBanRescue();
+            HideResultRescue();
             if (currentBotMatch == null)
             {
                 ShowError("Battle Bot", "Formation state unavailable.", "Bot match snapshot is missing.");
@@ -1392,6 +1530,11 @@ namespace EmojiWar.Client.UI.Match
             activeFormationContext = FormationContext.Bot;
             var team = currentBotMatch.playerTeam ?? Array.Empty<string>();
             EnsureFormationDraft($"bot:{currentMatchId}:{string.Join(",", team)}", team);
+            if (UseRescueFormation && TryRenderBotFormationRescue(locked: false))
+            {
+                return;
+            }
+
             ShowFormationBuilder(
                 "Battle Bot",
                 "Step 2 of 3 • Formation",
@@ -1433,6 +1576,7 @@ namespace EmojiWar.Client.UI.Match
         private void ShowWaitingForOpponentFormation()
         {
             HideBlindBanRescue();
+            HideResultRescue();
             if (currentPvpMatch == null)
             {
                 ShowError("Ranked PvP", "Formation wait state unavailable.", "Match snapshot is missing.");
@@ -1441,6 +1585,10 @@ namespace EmojiWar.Client.UI.Match
 
             currentPanelState = MatchUiPanelState.Waiting;
             ClearFormationDraft();
+            if (UseRescueFormation && TryRenderFormationRescue(locked: true))
+            {
+                return;
+            }
 
             SetHeader(
                 "Ranked PvP",
@@ -1453,10 +1601,17 @@ namespace EmojiWar.Client.UI.Match
         private void RenderBotResult(StartBotMatchResponseDto response)
         {
             HideBlindBanRescue();
+            HideFormationRescue();
+            HideBattlePresentationRescue();
             currentPanelState = MatchUiPanelState.Result;
             StopReplay();
             replayMoments = BuildReplayMoments(response.battleState?.eventLog, response.whyChain);
             RefreshDecisiveMomentStrip(response.whyChain);
+
+            if (UseRescueResult && TryRenderBotResultRescue(response))
+            {
+                return;
+            }
 
             SetHeader(
                 "Battle Bot",
@@ -1472,13 +1627,25 @@ namespace EmojiWar.Client.UI.Match
             SetActionButton(true, "Replay Highlights", ReplayHighlights);
         }
 
-        private void RenderPvpResult(QueueOrJoinMatchResponseDto response)
+        private void RenderPvpResult(QueueOrJoinMatchResponseDto response, bool skipPresentation = false)
         {
             HideBlindBanRescue();
+            HideFormationRescue();
             currentPanelState = MatchUiPanelState.Result;
             StopReplay();
             replayMoments = BuildReplayMoments(response.battleState?.eventLog, response.whyChain);
             RefreshDecisiveMomentStrip(response.whyChain);
+
+            if (!skipPresentation && TryRenderPvpBattlePresentation(response))
+            {
+                return;
+            }
+
+            HideBattlePresentationRescue();
+            if (UseRescueResult && TryRenderPvpResultRescue(response))
+            {
+                return;
+            }
 
             SetHeader(
                 "Ranked PvP",
@@ -1750,6 +1917,1155 @@ namespace EmojiWar.Client.UI.Match
             RefreshFormationView();
         }
 
+        private bool TryRenderFormationRescue(bool locked)
+        {
+            if (currentPvpMatch == null || !HasPlayerFinalTeam(currentPvpMatch))
+            {
+                return false;
+            }
+
+            EnsureFormationRescueScreen();
+            if (rescueFormationScreen == null)
+            {
+                return false;
+            }
+
+            var availableUnits = (currentPvpMatch.playerFinalTeam ?? Array.Empty<string>())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(FormationSlotOrder.Length)
+                .Select(value => FormationRescueScreen.UnitView.FromApiId(value, enemyTone: false))
+                .ToArray();
+            if (availableUnits.Length == 0)
+            {
+                return false;
+            }
+
+            var assignments = PlayerFormationIsLocked(currentPvpMatch)
+                ? BuildAssignmentsFromFormation(currentPvpMatch.playerFormation)
+                : BuildRescueFormationAssignments();
+
+            rescueFormationScreen.gameObject.SetActive(true);
+            rescueFormationScreen.transform.SetAsLastSibling();
+            rescueFormationScreen.Bind(
+                availableUnits,
+                currentPvpMatch.opponentBannedEmojiId,
+                currentPvpMatch.playerBannedEmojiId,
+                assignments,
+                locked || PlayerFormationIsLocked(currentPvpMatch),
+                currentPvpMatch.opponentFormation?.placements?.Length ?? 0,
+                OnRescueFormationChanged,
+                OnRescueFormationLocked,
+                FormationRescueScreen.ScreenConfig.RankedDefault);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            return true;
+        }
+
+        private bool TryRenderBotFormationRescue(bool locked)
+        {
+            if (currentBotMatch == null)
+            {
+                return false;
+            }
+
+            EnsureFormationRescueScreen();
+            if (rescueFormationScreen == null)
+            {
+                return false;
+            }
+
+            var availableUnits = (currentBotMatch.playerTeam ?? Array.Empty<string>())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(FormationSlotOrder.Length)
+                .Select(value => FormationRescueScreen.UnitView.FromApiId(value, enemyTone: false))
+                .ToArray();
+            if (availableUnits.Length == 0)
+            {
+                return false;
+            }
+
+            var assignments = currentBotMatch.playerFormation?.placements != null && currentBotMatch.playerFormation.placements.Length == FormationSlotOrder.Length
+                ? BuildAssignmentsFromFormation(currentBotMatch.playerFormation)
+                : BuildRescueFormationAssignments();
+
+            rescueFormationScreen.gameObject.SetActive(true);
+            rescueFormationScreen.transform.SetAsLastSibling();
+            rescueFormationScreen.Bind(
+                availableUnits,
+                string.Empty,
+                string.Empty,
+                assignments,
+                locked,
+                currentBotMatch.botFormation?.placements?.Length ?? 0,
+                OnRescueFormationChanged,
+                OnRescueBotFormationLocked,
+                FormationRescueScreen.ScreenConfig.BotDefault);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            return true;
+        }
+
+        private void EnsureFormationRescueScreen()
+        {
+            if (rescueFormationScreen != null)
+            {
+                return;
+            }
+
+            var canvas = FindAnyObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                return;
+            }
+
+            var mount = new GameObject("FormationRescueMount", typeof(RectTransform));
+            mount.transform.SetParent(canvas.transform, false);
+            var rect = mount.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rescueFormationScreen = mount.AddComponent<FormationRescueScreen>();
+        }
+
+        private void HideFormationRescue()
+        {
+            if (rescueFormationScreen == null)
+            {
+                return;
+            }
+
+            rescueFormationScreen.Hide();
+            rescueFormationScreen.gameObject.SetActive(false);
+        }
+
+        private bool TryRenderBotResultRescue(StartBotMatchResponseDto response)
+        {
+            if (response == null)
+            {
+                return false;
+            }
+
+            EnsureResultRescueScreen();
+            if (rescueResultScreen == null)
+            {
+                return false;
+            }
+
+            var playerWon = DidPlayerWin(response.winner, true);
+            var isDraw = IsDrawResult(response.winner);
+            var playerBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.playerFormation),
+                response.playerTeam,
+                BuildAliveLookup(response.battleState?.teamA),
+                enemyTone: false,
+                markWinner: playerWon);
+            var botBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.botFormation),
+                response.botTeam,
+                BuildAliveLookup(response.battleState?.teamB),
+                enemyTone: true,
+                markWinner: !playerWon && !isDraw);
+            var replayMoments = BuildResultMoments(response.battleState, response.whyChain);
+            var recapHighlights = BuildBotResultRecapHighlights(response, playerBoard, botBoard, replayMoments, playerWon, isDraw);
+            var result = new ResultRescueScreen.ResultModel
+            {
+                ResultKey = $"bot|{response.matchId}|{response.winner}|{response.whySummary}",
+                StepText = "STEP 3 OF 3",
+                HeaderTitle = "Battle Result",
+                ModeChipText = "Bot Battle",
+                OutcomeTitle = BuildOutcomeHeroText(response.winner, true),
+                IsVictory = playerWon,
+                IsDefeat = !playerWon && !isDraw,
+                IsDraw = isDraw,
+                OutcomeSummary = BuildResultOutcomeSummary(response.whySummary, recapHighlights),
+                WhyTitle = BuildWhyHeadline(playerWon, isDraw),
+                WhySummary = BuildWhyBody(response.whySummary, recapHighlights),
+                HeroUnits = BuildHeroUnits(
+                    playerBoard,
+                    botBoard,
+                    playerWon,
+                    isDraw),
+                YourBanFallbackText = "No ban phase",
+                OpponentBanFallbackText = "No ban phase",
+                RecapHighlights = recapHighlights,
+                Moments = replayMoments,
+                YourTeam = new ResultRescueScreen.TeamView
+                {
+                    Title = "Your Team",
+                    StatusText = playerWon ? "WIN" : isDraw ? "DRAW" : "FINAL BOARD",
+                    BoardUnits = playerBoard
+                },
+                OpponentTeam = new ResultRescueScreen.TeamView
+                {
+                    Title = "Bot Team",
+                    StatusText = !playerWon && !isDraw ? "WIN" : isDraw ? "DRAW" : "FINAL BOARD",
+                    BoardUnits = botBoard
+                }
+            };
+
+            rescueResultScreen.gameObject.SetActive(true);
+            rescueResultScreen.transform.SetAsLastSibling();
+            rescueResultScreen.Bind(
+                result,
+                PlayAgainFromResult,
+                EditSquadFromResult,
+                ReturnHome,
+                null);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            return true;
+        }
+
+        private bool TryRenderPvpResultRescue(QueueOrJoinMatchResponseDto response)
+        {
+            if (response == null)
+            {
+                return false;
+            }
+
+            EnsureResultRescueScreen();
+            if (rescueResultScreen == null)
+            {
+                return false;
+            }
+
+            var playerIsA = IsCurrentUserPlayerA();
+            var playerWon = DidPlayerWin(response.winner, playerIsA);
+            var isDraw = IsDrawResult(response.winner);
+            var playerAliveLookup = BuildAliveLookup(playerIsA ? response.battleState?.teamA : response.battleState?.teamB);
+            var opponentAliveLookup = BuildAliveLookup(playerIsA ? response.battleState?.teamB : response.battleState?.teamA);
+            var yourBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.playerFormation),
+                response.playerFinalTeam,
+                playerAliveLookup,
+                enemyTone: false,
+                markWinner: playerWon);
+            var opponentBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.opponentFormation),
+                response.opponentFinalTeam,
+                opponentAliveLookup,
+                enemyTone: true,
+                markWinner: !playerWon && !isDraw);
+            var replayMoments = BuildResultMoments(response.battleState, response.whyChain);
+            var recapHighlights = BuildPvpResultRecapHighlights(response, yourBoard, opponentBoard, replayMoments, playerWon, isDraw);
+
+            var result = new ResultRescueScreen.ResultModel
+            {
+                ResultKey = $"{response.matchId}|{response.winner}|{response.opponentBannedEmojiId}|{response.playerBannedEmojiId}",
+                StepText = "STEP 4 OF 4",
+                HeaderTitle = "Battle Result",
+                ModeChipText = "Ranked",
+                OutcomeTitle = BuildOutcomeHeroText(response.winner, playerIsA),
+                IsVictory = playerWon,
+                IsDefeat = !playerWon && !isDraw,
+                IsDraw = isDraw,
+                OutcomeSummary = BuildResultOutcomeSummary(response.whySummary, recapHighlights),
+                WhyTitle = BuildWhyHeadline(playerWon, isDraw),
+                WhySummary = BuildWhyBody(response.whySummary, recapHighlights),
+                HeroUnits = BuildHeroUnits(yourBoard, opponentBoard, playerWon, isDraw),
+                YourBanId = response.opponentBannedEmojiId,
+                OpponentBanId = response.playerBannedEmojiId,
+                YourBanFallbackText = "Ban result unavailable",
+                OpponentBanFallbackText = "Ban result unavailable",
+                RecapHighlights = recapHighlights,
+                Moments = replayMoments,
+                YourTeam = new ResultRescueScreen.TeamView
+                {
+                    Title = "Your Team",
+                    StatusText = playerWon ? "WIN" : isDraw ? "DRAW" : "FINAL BOARD",
+                    BoardUnits = yourBoard
+                },
+                OpponentTeam = new ResultRescueScreen.TeamView
+                {
+                    Title = "Opponent Team",
+                    StatusText = !playerWon && !isDraw ? "WIN" : isDraw ? "DRAW" : "FINAL BOARD",
+                    BoardUnits = opponentBoard
+                }
+            };
+
+            rescueResultScreen.gameObject.SetActive(true);
+            rescueResultScreen.transform.SetAsLastSibling();
+            rescueResultScreen.Bind(
+                result,
+                PlayAgainFromResult,
+                EditSquadFromResult,
+                ReturnHome,
+                null);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            return true;
+        }
+
+        private void EnsureResultRescueScreen()
+        {
+            if (rescueResultScreen != null)
+            {
+                return;
+            }
+
+            var canvas = FindAnyObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                return;
+            }
+
+            var mount = new GameObject("ResultRescueMount", typeof(RectTransform));
+            mount.transform.SetParent(canvas.transform, false);
+            var rect = mount.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rescueResultScreen = mount.AddComponent<ResultRescueScreen>();
+        }
+
+        private void HideResultRescue()
+        {
+            if (rescueResultScreen != null)
+            {
+                rescueResultScreen.Hide();
+                rescueResultScreen.gameObject.SetActive(false);
+            }
+
+            HideBattlePresentationRescue();
+        }
+
+        private bool TryRenderPvpBattlePresentation(QueueOrJoinMatchResponseDto response)
+        {
+            if (!UseRescueBattlePresentation || response == null)
+            {
+                return false;
+            }
+
+            EnsureBattlePresentationRescueScreen();
+            if (rescueBattlePresentationScreen == null)
+            {
+                return false;
+            }
+
+            var playerIsA = IsCurrentUserPlayerA();
+            var playerAliveLookup = BuildAliveLookup(playerIsA ? response.battleState?.teamA : response.battleState?.teamB);
+            var opponentAliveLookup = BuildAliveLookup(playerIsA ? response.battleState?.teamB : response.battleState?.teamA);
+            var yourBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.playerFormation),
+                response.playerFinalTeam,
+                playerAliveLookup,
+                enemyTone: false,
+                markWinner: DidPlayerWin(response.winner, playerIsA));
+            var opponentBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.opponentFormation),
+                response.opponentFinalTeam,
+                opponentAliveLookup,
+                enemyTone: true,
+                markWinner: !DidPlayerWin(response.winner, playerIsA) && !IsDrawResult(response.winner));
+
+            var moments = BuildResultMoments(response.battleState, response.whyChain);
+            var hasEventPlayback = response.battleState?.eventLog != null &&
+                                   response.battleState.eventLog.Any(evt => evt != null && !string.IsNullOrWhiteSpace(evt.caption));
+            var model = new BattlePresentationRescueScreen.PresentationModel
+            {
+                PresentationKey = $"{response.matchId}|presentation|{response.winner}|{response.opponentBannedEmojiId}|{response.playerBannedEmojiId}",
+                StepText = "STEP 4 OF 4",
+                ModeChipText = "Ranked PvP",
+                HeaderTitle = "Battle Presentation",
+                IntroTitle = "Squads Deploy",
+                IntroSummary = hasEventPlayback
+                    ? "Both formations are locked. Watch the battle log hit the arena."
+                    : "Both formations are locked. Quick battle highlights are ready.",
+                FinishTitle = BuildOutcomeHeroText(response.winner, playerIsA),
+                FinishSummary = BuildWhyBody(response.whySummary),
+                IsVictory = DidPlayerWin(response.winner, playerIsA),
+                IsDefeat = !DidPlayerWin(response.winner, playerIsA) && !IsDrawResult(response.winner),
+                IsDraw = IsDrawResult(response.winner),
+                UsedEventPlayback = hasEventPlayback,
+                ShowBanRecap = true,
+                YourBanId = response.opponentBannedEmojiId,
+                OpponentBanId = response.playerBannedEmojiId,
+                YourBanFallbackText = "No ban captured",
+                OpponentBanFallbackText = "No ban captured",
+                YourBoard = yourBoard,
+                OpponentBoard = opponentBoard,
+                Moments = moments
+            };
+
+            rescueBattlePresentationScreen.gameObject.SetActive(true);
+            rescueBattlePresentationScreen.transform.SetAsLastSibling();
+            rescueBattlePresentationScreen.Bind(
+                model,
+                () => CompletePvpBattlePresentation(response.matchId));
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            return true;
+        }
+
+        private void CompletePvpBattlePresentation(string matchId)
+        {
+            if (currentPvpMatch != null &&
+                string.Equals(currentPvpMatch.matchId, matchId, StringComparison.Ordinal))
+            {
+                RenderPvpResult(currentPvpMatch, true);
+                return;
+            }
+
+            HideBattlePresentationRescue();
+        }
+
+        private void EnsureBattlePresentationRescueScreen()
+        {
+            if (rescueBattlePresentationScreen != null)
+            {
+                return;
+            }
+
+            var canvas = FindAnyObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                return;
+            }
+
+            var mount = new GameObject("BattlePresentationRescueMount", typeof(RectTransform));
+            mount.transform.SetParent(canvas.transform, false);
+            var rect = mount.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rescueBattlePresentationScreen = mount.AddComponent<BattlePresentationRescueScreen>();
+        }
+
+        private void HideBattlePresentationRescue()
+        {
+            if (rescueBattlePresentationScreen == null)
+            {
+                return;
+            }
+
+            rescueBattlePresentationScreen.Hide();
+            rescueBattlePresentationScreen.gameObject.SetActive(false);
+        }
+
+        private void EnsureEmojiClashRescueScreen()
+        {
+            if (rescueEmojiClashScreen != null)
+            {
+                return;
+            }
+
+            var canvas = FindAnyObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                return;
+            }
+
+            var mount = new GameObject("EmojiClashRescueMount", typeof(RectTransform));
+            mount.transform.SetParent(canvas.transform, false);
+            var rect = mount.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rescueEmojiClashScreen = mount.AddComponent<EmojiClashRescueScreen>();
+        }
+
+        private void HideEmojiClashRescue()
+        {
+            StopEmojiClashResolveRoutine();
+            if (rescueEmojiClashScreen == null)
+            {
+                return;
+            }
+
+            rescueEmojiClashScreen.Hide();
+            rescueEmojiClashScreen.gameObject.SetActive(false);
+        }
+
+        private void StopEmojiClashResolveRoutine()
+        {
+            if (emojiClashResolveRoutine == null)
+            {
+                return;
+            }
+
+            StopCoroutine(emojiClashResolveRoutine);
+            emojiClashResolveRoutine = null;
+        }
+
+        private const float EmojiClashLockPauseSeconds = 0.22f;
+        private const float EmojiClashResolvedPauseSeconds = 0.95f;
+
+        private void RenderEmojiClashTurn()
+        {
+            HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            EnsureEmojiClashRescueScreen();
+            if (emojiClashController == null || rescueEmojiClashScreen == null)
+            {
+                ShowError("Emoji Clash", "Turn unavailable.", "The local clash controller could not render the turn.");
+                return;
+            }
+
+            currentPanelState = MatchUiPanelState.Ban;
+            var turnViewModel = emojiClashController.BuildTurnViewModel();
+            rescueEmojiClashScreen.gameObject.SetActive(true);
+            rescueEmojiClashScreen.transform.SetAsLastSibling();
+            rescueEmojiClashScreen.BindTurn(
+                turnViewModel,
+                OnEmojiClashPick,
+                ReturnHome,
+                OpenDeckBuilderFromClash);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+        }
+
+        private void RenderEmojiClashResult()
+        {
+            HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            EnsureEmojiClashRescueScreen();
+            if (emojiClashController == null || rescueEmojiClashScreen == null)
+            {
+                ShowError("Emoji Clash", "Result unavailable.", "The local clash result could not be rendered.");
+                return;
+            }
+
+            currentPanelState = MatchUiPanelState.Result;
+            rescueEmojiClashScreen.gameObject.SetActive(true);
+            rescueEmojiClashScreen.transform.SetAsLastSibling();
+            rescueEmojiClashScreen.BindResult(
+                emojiClashController.BuildResultViewModel(),
+                PlayAgainFromEmojiClash,
+                ReturnHome,
+                OpenDeckBuilderFromClash);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+        }
+
+        private void OnEmojiClashPick(string unitKey)
+        {
+            if (emojiClashController == null || emojiClashResolveRoutine != null)
+            {
+                return;
+            }
+
+            if (!emojiClashController.HandlePlayerPick(unitKey))
+            {
+                return;
+            }
+
+            HapticFeedback.TriggerLightImpact();
+            RenderEmojiClashTurn();
+            emojiClashResolveRoutine = StartCoroutine(ResolveEmojiClashTurnRoutine());
+        }
+
+        private IEnumerator ResolveEmojiClashTurnRoutine()
+        {
+            yield return new WaitForSecondsRealtime(EmojiClashLockPauseSeconds);
+            emojiClashController?.ResolveLockedTurn();
+            HapticFeedback.TriggerLightImpact();
+            RenderEmojiClashTurn();
+
+            yield return new WaitForSecondsRealtime(EmojiClashResolvedPauseSeconds);
+
+            if (emojiClashController == null)
+            {
+                emojiClashResolveRoutine = null;
+                yield break;
+            }
+
+            if (emojiClashController.IsMatchComplete)
+            {
+                emojiClashResolveRoutine = null;
+                RenderEmojiClashResult();
+                yield break;
+            }
+
+            emojiClashController.AdvanceToNextTurn();
+            emojiClashResolveRoutine = null;
+            RenderEmojiClashTurn();
+        }
+
+        private void PlayAgainFromEmojiClash()
+        {
+            if (emojiClashController == null)
+            {
+                emojiClashController = new EmojiClashController();
+            }
+
+            emojiClashController.StartEmojiClash();
+            RenderEmojiClashTurn();
+        }
+
+        private void OpenDeckBuilderFromClash()
+        {
+            LaunchSelections.BeginDeckEdit();
+            SceneManager.LoadScene(SceneNames.DeckBuilder);
+        }
+
+        private void PlayAgainFromResult()
+        {
+            OnResultActionSelected(0);
+        }
+
+        private void EditSquadFromResult()
+        {
+            OnResultActionSelected(1);
+        }
+
+        private static bool IsDrawResult(string winner)
+        {
+            return string.IsNullOrWhiteSpace(winner) || string.Equals(winner, "draw", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool DidPlayerWin(string winner, bool playerIsPlayerA)
+        {
+            if (IsDrawResult(winner))
+            {
+                return false;
+            }
+
+            return playerIsPlayerA
+                ? string.Equals(winner, "player_a", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(winner, "player_b", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildOutcomeHeroText(string winner, bool playerIsPlayerA)
+        {
+            if (IsDrawResult(winner))
+            {
+                return "DRAW";
+            }
+
+            return DidPlayerWin(winner, playerIsPlayerA) ? "VICTORY" : "DEFEAT";
+        }
+
+        private static string BuildWhyHeadline(bool playerWon, bool isDraw)
+        {
+            if (isDraw)
+            {
+                return "Battle Summary";
+            }
+
+            return playerWon ? "Why You Won" : "Why It Slipped";
+        }
+
+        private static string BuildWhyBody(string whySummary, IReadOnlyList<ResultRescueScreen.MomentView> recapHighlights = null)
+        {
+            var recapLines = recapHighlights?
+                .Where(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))
+                .Select(moment => $"- {moment.Caption.Trim()}")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(3)
+                .ToArray() ?? Array.Empty<string>();
+            if (recapLines.Length > 0)
+            {
+                return string.Join("\n", recapLines);
+            }
+
+            return string.IsNullOrWhiteSpace(whySummary)
+                ? "Battle recap unavailable. Replay details coming soon."
+                : whySummary.Trim();
+        }
+
+        private static string BuildResultOutcomeSummary(string whySummary, IReadOnlyList<ResultRescueScreen.MomentView> recapHighlights = null)
+        {
+            var headline = recapHighlights?
+                .FirstOrDefault(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))
+                ?.Caption;
+            if (!string.IsNullOrWhiteSpace(headline))
+            {
+                return headline.Trim();
+            }
+
+            return string.IsNullOrWhiteSpace(whySummary)
+                ? "Battle recap available below."
+                : whySummary.Trim();
+        }
+
+        private static Dictionary<string, bool> BuildAliveLookup(BattleUnitStateDto[] units)
+        {
+            var lookup = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            if (units == null)
+            {
+                return lookup;
+            }
+
+            foreach (var unit in units)
+            {
+                if (unit == null || string.IsNullOrWhiteSpace(unit.emojiId))
+                {
+                    continue;
+                }
+
+                lookup[UnitIconLibrary.NormalizeUnitKey(unit.emojiId)] = unit.alive;
+            }
+
+            return lookup;
+        }
+
+        private static ResultRescueScreen.UnitView[] BuildResultBoardUnits(
+            string[] orderedAssignments,
+            string[] fallbackUnits,
+            IReadOnlyDictionary<string, bool> aliveLookup,
+            bool enemyTone,
+            bool markWinner)
+        {
+            var result = new ResultRescueScreen.UnitView[FormationSlotOrder.Length];
+            for (var index = 0; index < result.Length; index++)
+            {
+                var unitId = orderedAssignments != null && index < orderedAssignments.Length
+                    ? orderedAssignments[index]
+                    : string.Empty;
+                if (string.IsNullOrWhiteSpace(unitId) && fallbackUnits != null && index < fallbackUnits.Length)
+                {
+                    unitId = fallbackUnits[index];
+                }
+
+                if (string.IsNullOrWhiteSpace(unitId))
+                {
+                    continue;
+                }
+
+                var normalized = UnitIconLibrary.NormalizeUnitKey(unitId);
+                var alive = false;
+                var hasAlive = aliveLookup != null && aliveLookup.TryGetValue(normalized, out alive);
+                result[index] = ResultRescueScreen.UnitView.FromApiId(
+                    unitId,
+                    enemyTone,
+                    FormationSlotShortLabels[index],
+                    isWinner: markWinner && (!hasAlive || alive),
+                    isAliveKnown: hasAlive,
+                    isAlive: hasAlive && alive);
+            }
+
+            return result;
+        }
+
+        private static ResultRescueScreen.UnitView[] BuildHeroUnits(
+            IReadOnlyList<ResultRescueScreen.UnitView> yourBoard,
+            IReadOnlyList<ResultRescueScreen.UnitView> opponentBoard,
+            bool playerWon,
+            bool isDraw)
+        {
+            if (isDraw)
+            {
+                return yourBoard?
+                    .Where(unit => !string.IsNullOrWhiteSpace(unit.Id))
+                    .Take(3)
+                    .ToArray() ?? Array.Empty<ResultRescueScreen.UnitView>();
+            }
+
+            var source = playerWon ? yourBoard : opponentBoard;
+            var winners = source?
+                .Where(unit => !string.IsNullOrWhiteSpace(unit.Id) && (!unit.IsAliveKnown || unit.IsAlive))
+                .Take(3)
+                .ToArray() ?? Array.Empty<ResultRescueScreen.UnitView>();
+
+            return winners.Length > 0
+                ? winners
+                : source?.Where(unit => !string.IsNullOrWhiteSpace(unit.Id)).Take(3).ToArray()
+                    ?? Array.Empty<ResultRescueScreen.UnitView>();
+        }
+
+        private static ResultRescueScreen.MomentView[] BuildResultMoments(BattleStateDto battleState, string[] whyChain)
+        {
+            var unitLookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (battleState?.teamA != null)
+            {
+                foreach (var unit in battleState.teamA)
+                {
+                    if (unit != null && !string.IsNullOrWhiteSpace(unit.unitId) && !string.IsNullOrWhiteSpace(unit.emojiId))
+                    {
+                        unitLookup[unit.unitId] = unit.emojiId;
+                    }
+                }
+            }
+
+            if (battleState?.teamB != null)
+            {
+                foreach (var unit in battleState.teamB)
+                {
+                    if (unit != null && !string.IsNullOrWhiteSpace(unit.unitId) && !string.IsNullOrWhiteSpace(unit.emojiId))
+                    {
+                        unitLookup[unit.unitId] = unit.emojiId;
+                    }
+                }
+            }
+
+            var list = new List<ResultRescueScreen.MomentView>();
+            if (battleState?.eventLog != null)
+            {
+                foreach (var evt in battleState.eventLog)
+                {
+                    if (evt == null || string.IsNullOrWhiteSpace(evt.caption))
+                    {
+                        continue;
+                    }
+
+                    list.Add(new ResultRescueScreen.MomentView
+                    {
+                        Caption = evt.caption,
+                        ActorId = ResolveMomentUnitId(evt.actor, unitLookup),
+                        TargetId = ResolveMomentUnitId(evt.target, unitLookup)
+                    });
+
+                    if (list.Count >= 4)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (list.Count == 0 && whyChain != null)
+            {
+                foreach (var entry in whyChain)
+                {
+                    if (string.IsNullOrWhiteSpace(entry))
+                    {
+                        continue;
+                    }
+
+                    list.Add(new ResultRescueScreen.MomentView
+                    {
+                        Caption = entry.Trim(),
+                        ActorId = string.Empty,
+                        TargetId = string.Empty
+                    });
+
+                    if (list.Count >= 4)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return list.ToArray();
+        }
+
+        private static string ResolveMomentUnitId(string candidate, IReadOnlyDictionary<string, string> unitLookup)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                return string.Empty;
+            }
+
+            if (unitLookup != null && unitLookup.TryGetValue(candidate, out var emojiId))
+            {
+                return emojiId;
+            }
+
+            return candidate;
+        }
+
+        private static ResultRescueScreen.MomentView[] BuildPvpResultRecapHighlights(
+            QueueOrJoinMatchResponseDto response,
+            IReadOnlyList<ResultRescueScreen.UnitView> yourBoard,
+            IReadOnlyList<ResultRescueScreen.UnitView> opponentBoard,
+            IReadOnlyList<ResultRescueScreen.MomentView> replayMoments,
+            bool playerWon,
+            bool isDraw)
+        {
+            var highlights = new List<ResultRescueScreen.MomentView>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildOpponentBanRecap(response.playerBannedEmojiId),
+                actorId: string.Empty,
+                targetId: response.playerBannedEmojiId);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildPlayerBanRecap(response.opponentBannedEmojiId),
+                actorId: string.Empty,
+                targetId: response.opponentBannedEmojiId);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildWinnerSurvivorRecap(playerWon, isDraw, yourBoard, opponentBoard, "Your", "Opponent"),
+                actorId: ResolveRecapActorId(playerWon, isDraw, yourBoard, opponentBoard),
+                targetId: string.Empty);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildFormationAnchorRecap(yourBoard, "Your"),
+                actorId: ResolveAnchorActorId(yourBoard),
+                targetId: string.Empty);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                replayMoments?.FirstOrDefault(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))?.Caption,
+                actorId: replayMoments?.FirstOrDefault(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))?.ActorId,
+                targetId: replayMoments?.FirstOrDefault(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))?.TargetId);
+
+            return highlights.Take(4).ToArray();
+        }
+
+        private static ResultRescueScreen.MomentView[] BuildBotResultRecapHighlights(
+            StartBotMatchResponseDto response,
+            IReadOnlyList<ResultRescueScreen.UnitView> yourBoard,
+            IReadOnlyList<ResultRescueScreen.UnitView> botBoard,
+            IReadOnlyList<ResultRescueScreen.MomentView> replayMoments,
+            bool playerWon,
+            bool isDraw)
+        {
+            var highlights = new List<ResultRescueScreen.MomentView>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildWinnerSurvivorRecap(playerWon, isDraw, yourBoard, botBoard, "Your", "Bot"),
+                actorId: ResolveRecapActorId(playerWon, isDraw, yourBoard, botBoard),
+                targetId: string.Empty);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildFormationAnchorRecap(yourBoard, "Your"),
+                actorId: ResolveAnchorActorId(yourBoard),
+                targetId: string.Empty);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildFormationAnchorRecap(botBoard, "Bot"),
+                actorId: ResolveAnchorActorId(botBoard),
+                targetId: string.Empty);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                replayMoments?.FirstOrDefault(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))?.Caption,
+                actorId: replayMoments?.FirstOrDefault(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))?.ActorId,
+                targetId: replayMoments?.FirstOrDefault(moment => moment != null && !string.IsNullOrWhiteSpace(moment.Caption))?.TargetId);
+
+            return highlights.Take(4).ToArray();
+        }
+
+        private static void AddRecapHighlight(
+            ICollection<ResultRescueScreen.MomentView> list,
+            ISet<string> seenCaptions,
+            string caption,
+            string actorId,
+            string targetId)
+        {
+            if (string.IsNullOrWhiteSpace(caption))
+            {
+                return;
+            }
+
+            var normalized = caption.Trim();
+            if (!seenCaptions.Add(normalized))
+            {
+                return;
+            }
+
+            list.Add(new ResultRescueScreen.MomentView
+            {
+                Caption = normalized,
+                ActorId = string.IsNullOrWhiteSpace(actorId) ? string.Empty : actorId,
+                TargetId = string.IsNullOrWhiteSpace(targetId) ? string.Empty : targetId
+            });
+        }
+
+        private static string BuildOpponentBanRecap(string bannedOnPlayerId)
+        {
+            var bannedName = HumanizeOptionalUnitName(bannedOnPlayerId);
+            return string.IsNullOrWhiteSpace(bannedName)
+                ? string.Empty
+                : $"Opponent banned {bannedName}, so it never reached your formation.";
+        }
+
+        private static string BuildPlayerBanRecap(string bannedOnOpponentId)
+        {
+            var bannedName = HumanizeOptionalUnitName(bannedOnOpponentId);
+            return string.IsNullOrWhiteSpace(bannedName)
+                ? string.Empty
+                : $"You banned {bannedName} before squads deployed.";
+        }
+
+        private static string BuildWinnerSurvivorRecap(
+            bool playerWon,
+            bool isDraw,
+            IReadOnlyList<ResultRescueScreen.UnitView> yourBoard,
+            IReadOnlyList<ResultRescueScreen.UnitView> opponentBoard,
+            string yourOwnerLabel,
+            string opponentOwnerLabel)
+        {
+            if (isDraw)
+            {
+                var yourAlive = CountAliveUnits(yourBoard);
+                var opponentAlive = CountAliveUnits(opponentBoard);
+                if (yourAlive > 0 || opponentAlive > 0)
+                {
+                    return $"The match ended in a draw with survivors still on both boards.";
+                }
+
+                return string.Empty;
+            }
+
+            var source = playerWon ? yourBoard : opponentBoard;
+            var ownerLabel = playerWon ? yourOwnerLabel : opponentOwnerLabel;
+            var focal = FindFocalSurvivor(source);
+            if (string.IsNullOrWhiteSpace(focal.Id))
+            {
+                return string.Empty;
+            }
+
+            var slotName = HumanizeSlotLabel(focal.SlotLabel);
+            if (focal.IsAliveKnown && focal.IsAlive)
+            {
+                if (slotName.StartsWith("Front", StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{ownerLabel} {focal.Name} held {slotName} through the finish.";
+                }
+
+                return $"{ownerLabel} {focal.Name} survived in {slotName} and finished the match.";
+            }
+
+            return string.Empty;
+        }
+
+        private static string BuildFormationAnchorRecap(IReadOnlyList<ResultRescueScreen.UnitView> board, string ownerLabel)
+        {
+            var anchor = FindFormationAnchor(board);
+            if (string.IsNullOrWhiteSpace(anchor.Id))
+            {
+                return string.Empty;
+            }
+
+            var slotName = HumanizeSlotLabel(anchor.SlotLabel);
+            return $"{ownerLabel} {anchor.Name} started in {slotName}.";
+        }
+
+        private static string ResolveRecapActorId(
+            bool playerWon,
+            bool isDraw,
+            IReadOnlyList<ResultRescueScreen.UnitView> yourBoard,
+            IReadOnlyList<ResultRescueScreen.UnitView> opponentBoard)
+        {
+            if (isDraw)
+            {
+                return string.Empty;
+            }
+
+            var source = playerWon ? yourBoard : opponentBoard;
+            return FindFocalSurvivor(source).Id;
+        }
+
+        private static string ResolveAnchorActorId(IReadOnlyList<ResultRescueScreen.UnitView> board)
+        {
+            return FindFormationAnchor(board).Id;
+        }
+
+        private static ResultRescueScreen.UnitView FindFocalSurvivor(IReadOnlyList<ResultRescueScreen.UnitView> board)
+        {
+            if (board == null)
+            {
+                return default;
+            }
+
+            var alive = board
+                .Where(unit => !string.IsNullOrWhiteSpace(unit.Id) && unit.IsAliveKnown && unit.IsAlive)
+                .OrderByDescending(unit => ScoreSlotPriority(unit.SlotLabel, preferBack: true))
+                .ThenBy(unit => unit.Name, StringComparer.Ordinal)
+                .ToArray();
+            if (alive.Length > 0)
+            {
+                return alive[0];
+            }
+
+            return default;
+        }
+
+        private static ResultRescueScreen.UnitView FindFormationAnchor(IReadOnlyList<ResultRescueScreen.UnitView> board)
+        {
+            if (board == null)
+            {
+                return default;
+            }
+
+            var populated = board
+                .Where(unit => !string.IsNullOrWhiteSpace(unit.Id))
+                .OrderByDescending(unit => ScoreSlotPriority(unit.SlotLabel, preferBack: false))
+                .ThenBy(unit => unit.Name, StringComparer.Ordinal)
+                .ToArray();
+            return populated.Length > 0 ? populated[0] : default;
+        }
+
+        private static int CountAliveUnits(IReadOnlyList<ResultRescueScreen.UnitView> board)
+        {
+            return board?.Count(unit => !string.IsNullOrWhiteSpace(unit.Id) && unit.IsAliveKnown && unit.IsAlive) ?? 0;
+        }
+
+        private static int ScoreSlotPriority(string slotLabel, bool preferBack)
+        {
+            return slotLabel switch
+            {
+                "FC" => preferBack ? 3 : 10,
+                "FL" => preferBack ? 2 : 9,
+                "FR" => preferBack ? 2 : 8,
+                "BR" => preferBack ? 10 : 4,
+                "BL" => preferBack ? 9 : 5,
+                _ => 0
+            };
+        }
+
+        private static string HumanizeSlotLabel(string shortLabel)
+        {
+            return shortLabel switch
+            {
+                "FL" => "Front Left",
+                "FC" => "Front Center",
+                "FR" => "Front Right",
+                "BL" => "Back Left",
+                "BR" => "Back Right",
+                _ => "the board"
+            };
+        }
+
+        private static string HumanizeOptionalUnitName(string unitId)
+        {
+            if (string.IsNullOrWhiteSpace(unitId))
+            {
+                return string.Empty;
+            }
+
+            var normalized = UnitIconLibrary.NormalizeUnitKey(unitId);
+            return EmojiIdUtility.TryFromApiId(normalized, out var emojiId)
+                ? EmojiIdUtility.ToDisplayName(emojiId)
+                : normalized;
+        }
+
+        private void OnRescueFormationChanged(string[] orderedAssignments)
+        {
+            rescueFormationAssignments = CloneFormationAssignments(orderedAssignments);
+        }
+
+        private void OnRescueFormationLocked(string[] orderedAssignments)
+        {
+            rescueFormationAssignments = CloneFormationAssignments(orderedAssignments);
+            HapticFeedback.TriggerLightImpact();
+            TryRenderFormationRescue(locked: true);
+            SubmitPvpFormation();
+        }
+
+        private void OnRescueBotFormationLocked(string[] orderedAssignments)
+        {
+            rescueFormationAssignments = CloneFormationAssignments(orderedAssignments);
+            HapticFeedback.TriggerLightImpact();
+            TryRenderBotFormationRescue(locked: true);
+            SubmitBotFormation();
+        }
+
         private void SubmitBotFormation()
         {
             StartCoroutine(SubmitBotFormationRoutine());
@@ -1785,6 +3101,7 @@ namespace EmojiWar.Client.UI.Match
             formationTeam = Array.Empty<string>();
             formationDraftKey = string.Empty;
             activeFormationContext = FormationContext.None;
+            rescueFormationAssignments = Array.Empty<string>();
         }
 
         private void EnsureFormationDraft(string key, string[] team)
@@ -1797,10 +3114,31 @@ namespace EmojiWar.Client.UI.Match
             formationDraftKey = key;
             formationDraft.Clear();
             formationTeam = team ?? Array.Empty<string>();
+            rescueFormationAssignments = Array.Empty<string>();
         }
 
         private FormationDto BuildFormationDtoFromDraft()
         {
+            var rescueAssignments = BuildRescueFormationAssignments();
+            if (rescueAssignments.Length == FormationSlotOrder.Length &&
+                rescueAssignments.All(emojiId => !string.IsNullOrWhiteSpace(emojiId)))
+            {
+                var rescuePlacements = new FormationPlacementDto[rescueAssignments.Length];
+                for (var index = 0; index < rescueAssignments.Length; index++)
+                {
+                    rescuePlacements[index] = new FormationPlacementDto
+                    {
+                        slot = FormationSlotOrder[index],
+                        emojiId = rescueAssignments[index],
+                    };
+                }
+
+                return new FormationDto
+                {
+                    placements = rescuePlacements,
+                };
+            }
+
             var placements = new FormationPlacementDto[formationDraft.Count];
             for (var index = 0; index < formationDraft.Count; index++)
             {
@@ -1931,6 +3269,16 @@ namespace EmojiWar.Client.UI.Match
                 : currentPvpQueueRequest?.deckId ?? string.Empty;
 
             LaunchSelections.StoreRankedResume(snapshot.matchId, persistedDeckId, persistedDeck);
+
+            if (!HasResolvedBanResults(snapshot))
+            {
+                rescueCompletedBanRevealKey = string.Empty;
+            }
+
+            if (PlayerFormationIsLocked(snapshot))
+            {
+                rescueFormationAssignments = BuildAssignmentsFromFormation(snapshot.playerFormation);
+            }
         }
 
         private void UpdateLocalPhaseDeadline(QueueOrJoinMatchResponseDto snapshot)
@@ -2027,6 +3375,15 @@ namespace EmojiWar.Client.UI.Match
                     continue;
                 }
 
+                if (UseRescueBlindBan &&
+                    rescueBlindBanScreen != null &&
+                    rescueBlindBanScreen.gameObject.activeInHierarchy &&
+                    IsBanPhase(currentPvpMatch))
+                {
+                    rescueBlindBanScreen.RefreshTimerOnly(ResolveBanSecondsRemaining());
+                    continue;
+                }
+
                 SafeRenderCurrentPvpState("ui countdown refresh");
             }
         }
@@ -2106,6 +3463,7 @@ namespace EmojiWar.Client.UI.Match
             StopPolling();
             ClearFormationDraft();
             StopReplay();
+            HideEmojiClashRescue();
 
             if (selectedMode == LaunchSelections.PvpRanked &&
                 currentPvpMatch != null &&
@@ -2145,6 +3503,9 @@ namespace EmojiWar.Client.UI.Match
         private void ShowError(string title, string subtitle, string details)
         {
             HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            HideEmojiClashRescue();
             currentPanelState = MatchUiPanelState.Error;
             StopReplay();
             SetHeader(title, subtitle, BuildActionableErrorDetails(details));
@@ -3056,6 +4417,80 @@ namespace EmojiWar.Client.UI.Match
         private static bool PlayerBanIsLocked(QueueOrJoinMatchResponseDto snapshot)
         {
             return snapshot != null && !string.IsNullOrWhiteSpace(snapshot.opponentBannedEmojiId);
+        }
+
+        private bool ShouldShowBanRevealBeforeFormation(QueueOrJoinMatchResponseDto snapshot)
+        {
+            if (!IsFormationPhase(snapshot) || !HasResolvedBanResults(snapshot))
+            {
+                return false;
+            }
+
+            var revealKey = BuildBanRevealKey(snapshot);
+            if (string.Equals(revealKey, rescueCompletedBanRevealKey, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool HasResolvedBanResults(QueueOrJoinMatchResponseDto snapshot)
+        {
+            return snapshot != null &&
+                   !string.IsNullOrWhiteSpace(snapshot.opponentBannedEmojiId) &&
+                   !string.IsNullOrWhiteSpace(snapshot.playerBannedEmojiId);
+        }
+
+        private static string BuildBanRevealKey(QueueOrJoinMatchResponseDto snapshot)
+        {
+            if (snapshot == null)
+            {
+                return string.Empty;
+            }
+
+            return $"{snapshot.matchId}|{snapshot.opponentBannedEmojiId}|{snapshot.playerBannedEmojiId}";
+        }
+
+        private static string[] BuildAssignmentsFromFormation(FormationDto formation)
+        {
+            var assignments = new string[FormationSlotOrder.Length];
+            if (formation?.placements == null)
+            {
+                return assignments;
+            }
+
+            for (var index = 0; index < FormationSlotOrder.Length; index++)
+            {
+                var slot = FormationSlotOrder[index];
+                var placement = formation.placements.FirstOrDefault(item =>
+                    item != null &&
+                    string.Equals(item.slot, slot, StringComparison.OrdinalIgnoreCase));
+                assignments[index] = placement?.emojiId ?? string.Empty;
+            }
+
+            return assignments;
+        }
+
+        private string[] BuildRescueFormationAssignments()
+        {
+            if (rescueFormationAssignments == null || rescueFormationAssignments.Length == 0)
+            {
+                return new string[FormationSlotOrder.Length];
+            }
+
+            var assignments = new string[FormationSlotOrder.Length];
+            for (var index = 0; index < Mathf.Min(assignments.Length, rescueFormationAssignments.Length); index++)
+            {
+                assignments[index] = rescueFormationAssignments[index];
+            }
+
+            return assignments;
+        }
+
+        private static string[] CloneFormationAssignments(string[] assignments)
+        {
+            return assignments == null ? Array.Empty<string>() : (string[])assignments.Clone();
         }
 
         private static bool PlayerFormationIsLocked(QueueOrJoinMatchResponseDto snapshot)

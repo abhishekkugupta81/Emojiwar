@@ -261,6 +261,15 @@ setCounter(
 );
 
 setCounter(
+  "hole",
+  "ghost",
+  REASON_CODES.HOLE_DELETED_HAZARD,
+  "Hole caught Ghost's dive path and deleted it before the phase landed.",
+  ["Ghost committed to the backline lane", "Hole removed the dive before it connected"],
+  ["delete"],
+);
+
+setCounter(
   "shield",
   "fire",
   REASON_CODES.SHIELD_BLOCKED_IMPACT,
@@ -285,6 +294,15 @@ setCounter(
   "Shield blocked Snake's opening pressure and bought time.",
   ["Snake wanted a clean poison line", "Shield forced it to waste the opener"],
   ["shield"],
+);
+
+setCounter(
+  "soap",
+  "ghost",
+  REASON_CODES.SOAP_CLEANSED_STATUS,
+  "Soap scrubbed Ghost's dive timing away and left it exposed in the lane.",
+  ["Ghost looked for a clean phase angle", "Soap disrupted the timing before the dive landed"],
+  ["damage", "disrupt"],
 );
 
 setCounter(
@@ -410,16 +428,7 @@ setCounter(
   REASON_CODES.GHOST_PHASED_PAST_FRONT,
   "Ghost phased past the frontline and deleted Heart's support lane.",
   ["Heart hid behind the frontline", "Ghost reached the backline anyway"],
-  ["phase", "heavy_damage"],
-);
-
-setCounter(
-  "ghost",
-  "soap",
-  REASON_CODES.GHOST_PHASED_PAST_FRONT,
-  "Ghost slipped through and removed Soap before the cleanse mattered.",
-  ["Soap wanted a longer support cycle", "Ghost cut the backline open"],
-  ["phase", "heavy_damage"],
+  ["phase", "damage", "disrupt"],
 );
 
 setCounter(
