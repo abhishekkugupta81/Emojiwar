@@ -5,7 +5,34 @@ namespace EmojiWar.Client.Gameplay.Clash
 {
     public sealed class EmojiClashBotOpponent : IEmojiClashOpponent
     {
+        public const string BotPolicyVersion = "opponent-policy-v2";
+        public const string BotPolicySeedSalt = "opponent-policy-v2";
+
         private const int CandidatePoolSize = 8;
+        private const int ExplorationPoolSize = 10;
+        private const double ScoreJitterRange = 0.28;
+        private const double SoftmaxTemperature = 1.25;
+        private const double ExplorationChance = 0.18;
+        private const double ReasonableScoreWindow = 2.2;
+
+        private static readonly Dictionary<int, Dictionary<string, double>> TurnOverusePenalty = new()
+        {
+            [0] = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["fire"] = 0.24,
+                ["wind"] = 0.34,
+                ["bomb"] = 0.2,
+                ["lightning"] = 0.2,
+                ["magnet"] = 0.14,
+                ["mirror"] = 0.1
+            },
+            [1] = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["wind"] = 0.2,
+                ["bomb"] = 0.12,
+                ["lightning"] = 0.1
+            }
+        };
 
         public string PickUnit(EmojiClashMatchState state, IReadOnlyList<string> availableUnitKeys)
         {
@@ -35,15 +62,24 @@ namespace EmojiWar.Client.Gameplay.Clash
             var turnIndex = Math.Clamp(state.CurrentTurnIndex, 0, EmojiClashRules.TotalTurns - 1);
             var turnValue = EmojiClashRules.GetTurnValue(turnIndex);
             var scoredPicks = legalPicks
-                .Select(unitKey => new ScoredPick(unitKey, ScoreCandidate(state, unitKey, playerRemaining, turnIndex, turnValue)))
+                .Select(unitKey => new ScoredPick(unitKey, ScoreCandidate(state, unitKey, playerRemaining, turnIndex, turnValue) +
+                    ResolveTurnOverusePenalty(unitKey, turnIndex) +
+                    ResolveSeededJitter(state, unitKey, turnIndex)))
                 .OrderByDescending(pick => pick.Score)
                 .ThenByDescending(pick => StableTieBreak(state.MatchSeed, turnIndex, pick.UnitKey))
                 .ToArray();
 
+            var bestScore = scoredPicks[0].Score;
             var pool = scoredPicks
+                .Where(pick => pick.Score >= bestScore - ReasonableScoreWindow)
                 .Take(Math.Min(CandidatePoolSize, scoredPicks.Length))
                 .ToArray();
-            return PickWeighted(state, pool, turnIndex);
+            if (pool.Length < Math.Min(3, scoredPicks.Length))
+            {
+                pool = scoredPicks.Take(Math.Min(3, scoredPicks.Length)).ToArray();
+            }
+
+            return PickWeighted(state, pool, scoredPicks, turnIndex);
         }
 
         private static double ScoreCandidate(
@@ -57,14 +93,14 @@ namespace EmojiWar.Client.Gameplay.Clash
             var turnNumber = turnIndex + 1;
             var expectedOutcome = ResolveExpectedOutcome(state, candidate, playerRemaining);
             var timingScore = ResolveTimingScore(profile, turnNumber, turnValue);
-            var counterCoverage = ResolveCounterOpportunity(candidate, playerRemaining) * 0.35;
+            var counterCoverage = ResolveCounterOpportunity(candidate, playerRemaining) * 0.30;
             var comebackScore = state.OpponentScore < state.PlayerScore
                 ? profile.BehindBonus * (1.1 + Math.Min(3, state.PlayerScore - state.OpponentScore) * 0.25)
                 : 0.0;
             var riskAdjustment = profile.Tags.Contains("safe", StringComparer.OrdinalIgnoreCase) ? 0.25 : 0.0;
             var flexibility = profile.Tags.Contains("flexible", StringComparer.OrdinalIgnoreCase) && turnIndex <= 1 ? 0.35 : 0.0;
 
-            return expectedOutcome * 1.45 +
+            return expectedOutcome * 1.25 +
                 timingScore +
                 counterCoverage +
                 comebackScore +
@@ -140,35 +176,60 @@ namespace EmojiWar.Client.Gameplay.Clash
             return total;
         }
 
-        private static string PickWeighted(EmojiClashMatchState state, IReadOnlyList<ScoredPick> pool, int turnIndex)
+        private static double ResolveTurnOverusePenalty(string unitKey, int turnIndex)
+        {
+            return TurnOverusePenalty.TryGetValue(turnIndex, out var penalties) &&
+                penalties.TryGetValue(unitKey, out var penalty)
+                ? -penalty
+                : 0.0;
+        }
+
+        private static double ResolveSeededJitter(EmojiClashMatchState state, string unitKey, int turnIndex)
+        {
+            unchecked
+            {
+                var hash = state.MatchSeed ^ 0x3A71B5;
+                hash = (hash * 397) ^ turnIndex;
+                hash = (hash * 397) ^ state.PlayerScore;
+                hash = (hash * 397) ^ (state.OpponentScore << 7);
+                hash = MixString(hash, unitKey);
+                var normalized = (hash & 0x7FFFFFFF) / (double)int.MaxValue;
+                return (normalized - 0.5) * ScoreJitterRange;
+            }
+        }
+
+        private static string PickWeighted(EmojiClashMatchState state, IReadOnlyList<ScoredPick> pool, IReadOnlyList<ScoredPick> scoredPicks, int turnIndex)
         {
             if (pool == null || pool.Count == 0)
             {
                 return string.Empty;
             }
 
-            var minScore = pool.Min(pick => pick.Score);
-            var weights = pool
-                .Select(pick => 1.0 + Math.Max(0.0, pick.Score - minScore) * 0.9)
+            var random = new Random(BuildPickSeed(state, turnIndex, scoredPicks) & int.MaxValue);
+            var activePool = random.NextDouble() < ExplorationChance
+                ? scoredPicks.Take(Math.Min(ExplorationPoolSize, scoredPicks.Count)).ToArray()
+                : pool.ToArray();
+            var maxScore = activePool.Max(pick => pick.Score);
+            var weights = activePool
+                .Select(pick => Math.Exp(Math.Clamp((pick.Score - maxScore) / SoftmaxTemperature, -8.0, 0.0)))
                 .ToArray();
             var totalWeight = weights.Sum();
             if (totalWeight <= 0.0)
             {
-                return pool[0].UnitKey;
+                return activePool[0].UnitKey;
             }
 
-            var random = new Random(BuildPickSeed(state, turnIndex, pool) & int.MaxValue);
             var roll = random.NextDouble() * totalWeight;
-            for (var index = 0; index < pool.Count; index++)
+            for (var index = 0; index < activePool.Length; index++)
             {
                 roll -= weights[index];
                 if (roll <= 0.0)
                 {
-                    return pool[index].UnitKey;
+                    return activePool[index].UnitKey;
                 }
             }
 
-            return pool[^1].UnitKey;
+            return activePool[^1].UnitKey;
         }
 
         private static int BuildPickSeed(EmojiClashMatchState state, int turnIndex, IReadOnlyList<ScoredPick> pool)
@@ -176,6 +237,8 @@ namespace EmojiWar.Client.Gameplay.Clash
             unchecked
             {
                 var hash = state.MatchSeed;
+                hash = MixString(hash, BotPolicySeedSalt);
+                hash = MixString(hash, "opponent");
                 hash = (hash * 397) ^ turnIndex;
                 hash = (hash * 397) ^ state.PlayerScore;
                 hash = (hash * 397) ^ (state.OpponentScore << 8);

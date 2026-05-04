@@ -139,6 +139,17 @@ namespace EmojiWar.Client.UI.Match
                 false,
                 "No ban phase",
                 "No ban phase");
+
+            public static ScreenConfig BattlePracticeDefault => new(
+                "STEP 3 OF 4",
+                "Set Formation",
+                "Bans are revealed. Place your final 5 for the practice battle.",
+                "Formation locked. Practice battle starting...",
+                "Practice Bot ready",
+                "Practice Bot ready",
+                true,
+                "Your ban is revealed",
+                "Practice Bot ban is revealed");
         }
 
         public readonly struct UnitView

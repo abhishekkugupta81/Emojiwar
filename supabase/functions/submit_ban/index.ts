@@ -1,5 +1,5 @@
 import type { BattleState, EmojiId, Formation, MatchMode } from "../_shared/contracts.ts";
-import { selectBattleTeamFromDeck } from "../_shared/battle-simulator.ts";
+import { buildDefaultFormation, selectBattleTeamFromDeck } from "../_shared/battle-simulator.ts";
 import { EMOJI_DEFINITIONS } from "../_shared/emoji-definitions.ts";
 import { jsonResponse, readJson } from "../_shared/http.ts";
 import { patchRows, resolveRequestUserId, selectRows } from "../_shared/supabase-admin.ts";
@@ -33,6 +33,8 @@ interface MatchRow {
     finalTeamB?: EmojiId[];
     formationA?: Formation;
     formationB?: Formation;
+    plannedFormationB?: Formation;
+    pendingBotBan?: EmojiId;
     battleState?: BattleState | null;
     whySummary?: string;
     whyChain?: string[];
@@ -91,6 +93,68 @@ Deno.serve(async (request) => {
 
     if (match.status !== "banning") {
       return jsonResponse({ error: `Match is not accepting bans in status '${match.status}'.` }, 409);
+    }
+
+    if (match.mode === "bot_practice") {
+      if (actorSide !== "player_a") {
+        return jsonResponse({ error: "Only the practice player can submit this ban." }, 403);
+      }
+
+      if (!match.deck_b.includes(payload.bannedEmojiId as EmojiId)) {
+        return jsonResponse({ error: "Selected emoji is not available to ban on the Practice Bot deck." }, 400);
+      }
+
+      const botBan = match.bans?.player_b ?? match.current_state?.pendingBotBan;
+      if (!botBan || !match.deck_a.includes(botBan)) {
+        return jsonResponse({ error: "Practice Bot ban is unavailable for this match." }, 409);
+      }
+
+      const updatedBans = {
+        ...(match.bans ?? {}),
+        player_a: payload.bannedEmojiId as EmojiId,
+        player_b: botBan,
+      };
+      const finalTeamA = selectBattleTeamFromDeck(removeBannedEmoji(match.deck_a, updatedBans.player_b), 5).team;
+      const finalTeamB = selectBattleTeamFromDeck(removeBannedEmoji(match.deck_b, updatedBans.player_a), 5).team;
+      const plannedFormationB = match.current_state?.plannedFormationB;
+      const finalTeamBSet = new Set(finalTeamB);
+      const formationB = plannedFormationB?.placements?.length === 5 &&
+          plannedFormationB.placements.every((placement) => finalTeamBSet.has(placement.emojiId))
+        ? plannedFormationB
+        : buildDefaultFormation(finalTeamB);
+
+      await patchRows<MatchRow>(
+        `matches?id=eq.${match.id}`,
+        {
+          status: "formation",
+          bans: updatedBans,
+          current_state: {
+            ...(match.current_state ?? {}),
+            phase: "formation",
+            playerDeckA: match.deck_a,
+            playerDeckB: match.deck_b,
+            finalTeamA,
+            finalTeamB,
+            formationB,
+            battleSeed: match.current_state?.battleSeed ?? crypto.randomUUID(),
+          },
+        },
+      );
+
+      return jsonResponse({
+        accepted: true,
+        matchId: payload.matchId,
+        playerId: requestUserId,
+        bannedEmojiId: payload.bannedEmojiId,
+        status: "formation",
+        phase: "formation",
+        note: "Both bans are locked. Set your 5v5 formation before the practice battle resolves.",
+        playerBannedEmojiId: updatedBans.player_b,
+        opponentBannedEmojiId: updatedBans.player_a,
+        playerFinalTeam: finalTeamA,
+        opponentFinalTeam: finalTeamB,
+        opponentFormation: formationB,
+      });
     }
 
     const targetDeck = actorSide === "player_a" ? match.deck_b : match.deck_a;

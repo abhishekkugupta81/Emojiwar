@@ -2,12 +2,16 @@ import type { EmojiId, MatchMode, StartBotMatchRequest } from "../_shared/contra
 import { buildDefaultFormation, selectBattleTeamFromDeck } from "../_shared/battle-simulator.ts";
 import { EMOJI_DEFINITIONS } from "../_shared/emoji-definitions.ts";
 import { insertRows, resolveRequestUserId } from "../_shared/supabase-admin.ts";
-import { buildBotMatchPlan } from "./service.ts";
+import { buildBotMatchPlan, getBotBan } from "./service.ts";
 
 const RULES_VERSION = "launch-5v5-001";
 
-function validateDeck(playerDeck: string[]): { isValid: boolean; error?: string } {
-  if (playerDeck.length < 5 || playerDeck.length > 6) {
+function validateDeck(mode: MatchMode, playerDeck: string[]): { isValid: boolean; error?: string } {
+  if (mode === "bot_practice" && playerDeck.length !== 6) {
+    return { isValid: false, error: "Battle Practice requires exactly 6 unique emojis for blind ban." };
+  }
+
+  if (mode === "bot_smart" && (playerDeck.length < 5 || playerDeck.length > 6)) {
     return { isValid: false, error: "Battle Bot accepts a 5-emoji squad or a 6-emoji active deck." };
   }
 
@@ -34,7 +38,7 @@ Deno.serve(async (request) => {
     const requestUserId = await resolveRequestUserId(request);
     const mode: MatchMode = payload.mode === "bot_smart" ? "bot_smart" : "bot_practice";
     const playerDeck = Array.isArray(payload.playerDeck) ? payload.playerDeck as EmojiId[] : [];
-    const validation = validateDeck(playerDeck);
+    const validation = validateDeck(mode, playerDeck);
     if (!validation.isValid) {
       return new Response(JSON.stringify({ error: validation.error }), {
         status: 400,
@@ -42,8 +46,11 @@ Deno.serve(async (request) => {
       });
     }
 
+    const playerPlanTeam = mode === "bot_practice"
+      ? [...playerDeck]
+      : selectBattleTeamFromDeck(playerDeck, 5).team;
     const selectedPlayerTeam = selectBattleTeamFromDeck(playerDeck, 5);
-    const botPlan = buildBotMatchPlan(mode, selectedPlayerTeam.team);
+    const botPlan = buildBotMatchPlan(mode, playerPlanTeam);
     const botProfile = botPlan.profile;
     const botDeck = botPlan.deck;
     const selectedBotTeam = {
@@ -54,6 +61,50 @@ Deno.serve(async (request) => {
       ? botPlan.formation
       : buildDefaultFormation(selectedBotTeam.team);
     const battleSeed = crypto.randomUUID();
+
+    if (mode === "bot_practice") {
+      const botBan = getBotBan(mode, playerDeck);
+      const inserted = await insertRows<{ id: string }>("matches", {
+        mode,
+        status: "banning",
+        player_a: requestUserId,
+        bot_profile_id: botProfile.id,
+        deck_a: playerDeck,
+        deck_b: botDeck,
+        bans: {
+          player_b: botBan,
+        },
+        current_state: {
+          phase: "ban",
+          battleSeed,
+          playerDeckA: playerDeck,
+          playerDeckB: botDeck,
+          pendingBotBan: botBan,
+          plannedFormationB: botFormation,
+          botStrategy: botPlan.strategyLabel,
+        },
+        rules_version: RULES_VERSION,
+      });
+
+      return new Response(JSON.stringify({
+        matchId: inserted[0].id,
+        mode,
+        playerDeckId: payload.activeDeckId ?? null,
+        botProfile,
+        playerDeck,
+        botDeck,
+        playerTeam: playerDeck,
+        botTeam: botDeck,
+        benchEmojiId: null,
+        rulesVersion: RULES_VERSION,
+        status: "banning",
+        phase: "ban",
+        botFormation,
+        note: `${botPlan.note}\n\nPick one Practice Bot emoji to ban. The bot's ban stays hidden until you lock yours.`,
+      }, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
     const inserted = await insertRows<{ id: string }>("matches", {
       mode,

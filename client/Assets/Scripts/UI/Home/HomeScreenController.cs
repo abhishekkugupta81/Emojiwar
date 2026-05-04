@@ -46,7 +46,7 @@ namespace EmojiWar.Client.UI.Home
         [SerializeField] private bool useRescueHome = true;
 
         private Coroutine rankSummaryRoutine;
-        private string cachedRankSummary = "Ranked summary pending";
+        private string cachedRankSummary = "Clash ranking pending";
         private HomeRescueScreen rescueHomeScreen;
         private GameObject runtimeBottomNav;
         private GameObject runtimeProfilePanel;
@@ -297,6 +297,10 @@ namespace EmojiWar.Client.UI.Home
                   ?? (allowGlobalFallback
                       ? FindButtonByLabel("Edit Deck") ?? FindButtonByLabel("Edit Squad")
                       : null);
+            if (editDeckButton != null)
+            {
+                editDeckButton.gameObject.SetActive(false);
+            }
 
             if (homePanelBackground == null)
             {
@@ -317,22 +321,7 @@ namespace EmojiWar.Client.UI.Home
 
         public void OpenBattlePlayers()
         {
-            if (LaunchSelections.HasRankedResume())
-            {
-                OpenResumeRankedMatch();
-                return;
-            }
-
-            LaunchSelections.BeginRankedMatchSelection();
-            if (TryGetConfirmedRankedSquad(out var rankedSquad))
-            {
-                LaunchSelections.SetPendingSquad(rankedSquad);
-                SceneManager.LoadScene(SceneNames.Match);
-                return;
-            }
-
-            TryPrefillPendingSquad(6);
-            SceneManager.LoadScene(SceneNames.DeckBuilder);
+            OpenEmojiClashPvp();
         }
 
         public void OpenEmojiClash()
@@ -341,24 +330,33 @@ namespace EmojiWar.Client.UI.Home
             SceneManager.LoadScene(SceneNames.Match);
         }
 
+        public void OpenEmojiClashPvp()
+        {
+            if (LaunchSelections.HasClashPvpResume())
+            {
+                LaunchSelections.BeginClashPvpResume();
+            }
+            else
+            {
+                LaunchSelections.BeginEmojiClashPvp();
+            }
+
+            SceneManager.LoadScene(SceneNames.Match);
+        }
+
         public void OpenResumeRankedMatch()
         {
-            LaunchSelections.BeginRankedResume();
-            SceneManager.LoadScene(SceneNames.Match);
+            OpenEmojiClashPvp();
         }
 
         public void OpenBattleBot()
         {
-            LaunchSelections.BeginBotMatchSelection(LaunchSelections.BotPractice);
-            TryPrefillPendingSquad(5);
-            SceneManager.LoadScene(SceneNames.DeckBuilder);
+            OpenEmojiClash();
         }
 
         public void OpenSmartBot()
         {
-            LaunchSelections.BeginBotMatchSelection(LaunchSelections.BotSmart);
-            TryPrefillPendingSquad(5);
-            SceneManager.LoadScene(SceneNames.DeckBuilder);
+            OpenEmojiClash();
         }
 
         public void OpenDeckBuilder()
@@ -1722,7 +1720,7 @@ namespace EmojiWar.Client.UI.Home
             var bootstrap = AppBootstrap.Instance;
             if (bootstrap == null || bootstrap.SupabaseConfig == null || !bootstrap.SupabaseConfig.IsConfigured || !bootstrap.SessionState.HasSession)
             {
-                cachedRankSummary = "S1 • Ranked summary unavailable";
+                cachedRankSummary = "S1 • Clash ranking unavailable";
                 RefreshView();
                 yield break;
             }
@@ -1736,7 +1734,7 @@ namespace EmojiWar.Client.UI.Home
             request.timeout = 8;
             if (!TryBeginWebRequest(request, out var operation, out _))
             {
-                cachedRankSummary = "S1 • Ranked summary unavailable";
+                cachedRankSummary = "S1 • Clash ranking unavailable";
                 RefreshView();
                 yield break;
             }
@@ -1745,7 +1743,7 @@ namespace EmojiWar.Client.UI.Home
 
             if (request.result != UnityWebRequest.Result.Success)
             {
-                cachedRankSummary = "S1 • Ranked summary unavailable";
+                cachedRankSummary = "S1 • Clash ranking unavailable";
                 RefreshView();
                 yield break;
             }
@@ -1767,11 +1765,15 @@ namespace EmojiWar.Client.UI.Home
 
         private void RewordPrimaryButtons()
         {
-            TrySetButtonText(rankedButton, "Play Ranked");
-            TrySetButtonText(practiceButton, "Practice");
+            TrySetButtonText(rankedButton, "Clash PvP");
+            TrySetButtonText(practiceButton, "Clash Bot");
             TrySetButtonText(codexButton, "Codex");
             TrySetButtonText(leaderboardButton, "Leaderboard");
             TrySetButtonText(editDeckButton, "Edit Squad");
+            if (editDeckButton != null)
+            {
+                editDeckButton.gameObject.SetActive(false);
+            }
         }
 
         private void StylePrimaryButtons()
@@ -1781,6 +1783,10 @@ namespace EmojiWar.Client.UI.Home
             StyleButton(codexButton, UiThemeRuntime.Theme.SecondaryCtaColor, false);
             StyleButton(leaderboardButton, UiThemeRuntime.Theme.SecondaryCtaColor, false);
             StyleButton(editDeckButton, UiThemeRuntime.Theme.SecondaryCtaColor, false);
+            if (editDeckButton != null)
+            {
+                editDeckButton.gameObject.SetActive(false);
+            }
             NormalizePrimaryButtonLabels();
         }
 
@@ -2372,13 +2378,13 @@ namespace EmojiWar.Client.UI.Home
             var bootstrap = AppBootstrap.Instance;
             if (bootstrap == null)
             {
-                return "Display Name: Player\nUser: No session\nRanked: Unavailable";
+                return "Display Name: Player\nUser: No session\nClash: Unavailable";
             }
 
             return
                 $"Display Name: {BuildDisplayName(bootstrap.SessionState)}\n" +
                 $"User: {BuildUserSuffix(bootstrap.SessionState.UserId)}\n" +
-                $"Ranked: {cachedRankSummary}";
+                $"Clash: {cachedRankSummary}";
         }
 
         private void AnimateSceneProfilePanel(bool show)
@@ -2551,11 +2557,11 @@ namespace EmojiWar.Client.UI.Home
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
 
-            rankedButton = CreateRuntimeActionButton("Play Ranked", OpenBattlePlayers, true);
-            practiceButton = CreateRuntimeActionButton("Practice", OpenBattleBot, false);
+            rankedButton = CreateRuntimeActionButton("Clash PvP", OpenEmojiClashPvp, true);
+            practiceButton = CreateRuntimeActionButton("Clash Bot", OpenEmojiClash, false);
             codexButton = CreateRuntimeActionButton("Codex", OpenCodex, false);
             leaderboardButton = CreateRuntimeActionButton("Leaderboard", OpenLeaderboard, false);
-            editDeckButton = CreateRuntimeActionButton("Edit Squad", OpenDeckBuilder, false);
+            editDeckButton = null;
 
             DisableLegacyPrimaryButton(legacyRanked);
             DisableLegacyPrimaryButton(legacyPractice);
@@ -3440,8 +3446,8 @@ namespace EmojiWar.Client.UI.Home
         private void DisableDuplicatePrimaryButtons()
         {
             var allButtons = FindObjectsOfType<Button>(true);
-            HideDuplicateButtonCopies(allButtons, rankedButton, "Play Ranked", "Battle Players");
-            HideDuplicateButtonCopies(allButtons, practiceButton, "Practice", "Battle Bot");
+            HideDuplicateButtonCopies(allButtons, rankedButton, "Play Ranked", "Battle Players", "Resume Ranked Match");
+            HideDuplicateButtonCopies(allButtons, practiceButton, "Practice", "Battle Bot", "Smart Bot");
             HideDuplicateButtonCopies(allButtons, codexButton, "Codex");
             HideDuplicateButtonCopies(allButtons, leaderboardButton, "Leaderboard");
             HideDuplicateButtonCopies(allButtons, editDeckButton, "Edit Squad", "Edit Deck");

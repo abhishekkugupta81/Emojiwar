@@ -239,6 +239,7 @@ namespace EmojiWar.Client.UI.Common
                 selectedEnemyBan.HasValue ? EmojiIdUtility.ToApiId(selectedEnemyBan.Value) : string.Empty,
                 banLocked && selectedEnemyBan.HasValue ? EmojiIdUtility.ToApiId(selectedEnemyBan.Value) : string.Empty,
                 EmojiIdUtility.ToApiId(opponentBan),
+                banLocked && selectedEnemyBan.HasValue,
                 targetId =>
                 {
                     if (banLocked || !EmojiIdUtility.TryFromApiId(targetId, out var parsed))

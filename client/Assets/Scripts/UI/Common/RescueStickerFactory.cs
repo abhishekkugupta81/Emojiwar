@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -13,6 +14,7 @@ namespace EmojiWar.Client.UI.Common
     {
         private static Sprite roundedSprite;
         private static Sprite circleSprite;
+        private static readonly Dictionary<string, Sprite> ResultUiSprites = new();
 
         public enum FighterVisualMode
         {
@@ -86,6 +88,44 @@ namespace EmojiWar.Client.UI.Common
             image.color = WithAlpha(color, alpha);
             image.raycastTarget = false;
             return blob;
+        }
+
+        public static GameObject CreateResultArtPanel(Transform parent, string name, string spriteName, Vector2 size, Color fallbackColor)
+        {
+            EnsureSprites();
+            var panel = CreateRectObject(parent, string.IsNullOrWhiteSpace(name) ? "ResultArtPanel" : name);
+            var rect = panel.GetComponent<RectTransform>();
+            rect.sizeDelta = size;
+            var image = panel.AddComponent<Image>();
+            image.raycastTarget = false;
+            if (!TryApplyResultArt(image, spriteName))
+            {
+                image.sprite = roundedSprite;
+                image.type = Image.Type.Sliced;
+                image.color = fallbackColor;
+            }
+
+            return panel;
+        }
+
+        public static bool TryApplyResultArt(Image image, string spriteName)
+        {
+            if (image == null || string.IsNullOrWhiteSpace(spriteName))
+            {
+                return false;
+            }
+
+            var sprite = LoadResultUiSprite(spriteName);
+            if (sprite == null)
+            {
+                return false;
+            }
+
+            image.sprite = sprite;
+            image.type = Image.Type.Simple;
+            image.preserveAspect = false;
+            image.color = Color.white;
+            return true;
         }
 
         public static GameObject CreatePhaseHeader(Transform parent, string eyebrow, string title, string progressText)
@@ -261,9 +301,31 @@ namespace EmojiWar.Client.UI.Common
 
         public static GameObject CreateResultHeroScoreCard(Transform parent, string title, string scoreLine)
         {
-            var card = CreateGlassPanel(parent, "HeroScoreCard", Vector2.zero, true);
-            CreateLabel(card.transform, "ScoreTitle", title, 18f, FontStyles.Bold, Palette.SoftWhite, TextAlignmentOptions.Center, new Vector2(0.10f, 0.64f), new Vector2(0.90f, 0.92f));
-            CreateLabel(card.transform, "ScoreLine", scoreLine, 34f, FontStyles.Bold, EmojiWarVisualStyle.Colors.GoldLight, TextAlignmentOptions.Center, new Vector2(0.08f, 0.12f), new Vector2(0.92f, 0.70f));
+            var card = CreateResultArtPanel(
+                parent,
+                "HeroScoreCard",
+                "result_score_plaque",
+                Vector2.zero,
+                WithAlpha(Color.Lerp(EmojiWarVisualStyle.Colors.Depth, Palette.InkPurple, 0.18f), 0.95f));
+            var image = card.GetComponent<Image>();
+            if (image != null && image.sprite == roundedSprite)
+            {
+                image.color = WithAlpha(Color.Lerp(EmojiWarVisualStyle.Colors.Depth, Palette.InkPurple, 0.18f), 0.95f);
+            }
+
+            var pill = CreateStatusChip(card.transform, title.ToUpperInvariant(), Palette.SunnyYellow, Palette.InkPurple);
+            var pillRect = pill.GetComponent<RectTransform>();
+            pillRect.anchorMin = new Vector2(0.285f, 0.790f);
+            pillRect.anchorMax = new Vector2(0.715f, 0.945f);
+            pillRect.offsetMin = Vector2.zero;
+            pillRect.offsetMax = Vector2.zero;
+            var score = CreateLabel(card.transform, "ScoreLine", scoreLine, 106f, FontStyles.Bold, EmojiWarVisualStyle.Colors.GoldLight, TextAlignmentOptions.Center, new Vector2(0.05f, 0.225f), new Vector2(0.95f, 0.765f));
+            score.enableAutoSizing = true;
+            score.fontSizeMax = 106f;
+            score.fontSizeMin = 58f;
+            score.richText = true;
+            AddOutlineAndShadow(score.gameObject, Palette.SoftWhite, new Vector2(0f, -6f), 3.4f);
+            CreateLabel(card.transform, "ScoreSupport", "You vs Rival", 20f, FontStyles.Bold, Palette.SoftWhite, TextAlignmentOptions.Center, new Vector2(0.10f, 0.070f), new Vector2(0.90f, 0.225f));
             return card;
         }
 
@@ -1198,6 +1260,23 @@ namespace EmojiWar.Client.UI.Common
             var shadow = GetOrAdd<Shadow>(target);
             shadow.effectColor = WithAlpha(Palette.InkPurple, 0.44f);
             shadow.effectDistance = shadowDistance;
+        }
+
+        private static Sprite LoadResultUiSprite(string spriteName)
+        {
+            if (string.IsNullOrWhiteSpace(spriteName))
+            {
+                return null;
+            }
+
+            if (ResultUiSprites.TryGetValue(spriteName, out var cached))
+            {
+                return cached;
+            }
+
+            var sprite = Resources.Load<Sprite>($"EmojiWar/ResultUi/{spriteName}");
+            ResultUiSprites[spriteName] = sprite;
+            return sprite;
         }
 
         private static T GetOrAdd<T>(GameObject target) where T : Component

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using EmojiWar.Client.Content;
 using EmojiWar.Client.Core;
@@ -29,7 +30,17 @@ namespace EmojiWar.Client.UI.Home
         private HomeScreenController controller;
         private RectTransform root;
         private RectTransform contentRoot;
+        private RectTransform headerRoot;
+        private RectTransform heroStageRoot;
+        private RectTransform heroTitleStackRoot;
+        private RectTransform primaryCtaRoot;
+        private RectTransform secondaryActionsRoot;
+        private Coroutine homeEntranceCoroutine;
+        private int homeMotionVersion;
         private readonly List<RectTransform> enterTargets = new();
+        private readonly List<RectTransform> heroStickerTargets = new();
+        private readonly List<RectTransform> secondaryButtonTargets = new();
+        private readonly List<RectTransform> decorativeAccentTargets = new();
 
         public void Initialize(HomeScreenController owner)
         {
@@ -38,8 +49,10 @@ namespace EmojiWar.Client.UI.Home
 
         public void Show()
         {
+            CancelHomeMotion();
             if (root != null)
             {
+                root.gameObject.SetActive(false);
                 Destroy(root.gameObject);
                 root = null;
             }
@@ -50,8 +63,10 @@ namespace EmojiWar.Client.UI.Home
 
         public void Hide()
         {
+            CancelHomeMotion();
             if (root != null)
             {
+                root.gameObject.SetActive(false);
                 Destroy(root.gameObject);
                 root = null;
             }
@@ -65,6 +80,14 @@ namespace EmojiWar.Client.UI.Home
         private void BuildLayout()
         {
             enterTargets.Clear();
+            heroStickerTargets.Clear();
+            secondaryButtonTargets.Clear();
+            decorativeAccentTargets.Clear();
+            headerRoot = null;
+            heroStageRoot = null;
+            heroTitleStackRoot = null;
+            primaryCtaRoot = null;
+            secondaryActionsRoot = null;
 
             var rootObject = RescueStickerFactory.CreateScreenRoot(transform, "HomeRescueRoot");
             root = rootObject.GetComponent<RectTransform>();
@@ -81,15 +104,14 @@ namespace EmojiWar.Client.UI.Home
 
             CreateHeader();
             CreateHeroStage();
-            CreateCurrentSquad();
             CreateModeCtas();
             CreateSecondaryActions();
-            CreateBottomNav();
         }
 
         private void CreateHeader()
         {
             var header = CreateRect("HomeHeader", contentRoot);
+            headerRoot = header;
             SetAnchors(header, new Vector2(0.06f, 0.905f), new Vector2(0.94f, 0.972f));
             AddEnterTarget(header);
 
@@ -113,7 +135,7 @@ namespace EmojiWar.Client.UI.Home
 
             var rankedChip = RescueStickerFactory.CreateStatusChip(
                 header,
-                "Ranked",
+                "Clash",
                 RescueStickerFactory.Palette.Mint,
                 RescueStickerFactory.Palette.InkPurple);
             SetAnchors(rankedChip.GetComponent<RectTransform>(), new Vector2(0.82f, 0.38f), new Vector2(1f, 0.94f));
@@ -122,15 +144,17 @@ namespace EmojiWar.Client.UI.Home
         private void CreateHeroStage()
         {
             var heroRect = RescueStickerFactory.CreateOpenHeroStage(contentRoot, "HomeHeroStage");
+            heroStageRoot = heroRect;
             SetAnchors(heroRect, new Vector2(0.035f, EmojiWarVisualStyle.Layout.HeroStageBottom), new Vector2(0.965f, EmojiWarVisualStyle.Layout.HeroStageTop));
             AddEnterTarget(heroRect);
 
             var titleStack = CreateRect("HeroTitleStack", heroRect);
+            heroTitleStackRoot = titleStack;
             SetAnchors(titleStack, new Vector2(0.18f, 0.21f), new Vector2(0.82f, 0.76f));
 
             var modeBadge = RescueStickerFactory.CreateStatusChip(
                 titleStack,
-                "Ranked PvP",
+                "Quick Clash",
                 new Color(0.22f, 0.16f, 0.52f, 0.82f),
                 EmojiWarVisualStyle.Colors.GoldLight);
             SetAnchors(modeBadge.GetComponent<RectTransform>(), new Vector2(0.32f, 0.78f), new Vector2(0.68f, 0.92f));
@@ -180,7 +204,7 @@ namespace EmojiWar.Client.UI.Home
             RescueStickerFactory.CreateLabel(
                 titleStack,
                 "HeroCopy",
-                "Build a squad. Ban one. Clash fast.",
+                "Pick fast. Outsmart rivals. Clash now.",
                 17f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
@@ -276,9 +300,11 @@ namespace EmojiWar.Client.UI.Home
                 rect.anchorMax = positions[index];
                 rect.anchoredPosition = Vector2.zero;
                 rect.localRotation = Quaternion.Euler(0f, 0f, tilts[index]);
-                NativeMotionKit.IdleBob(this, rect, 7f + index, 1.18f + index * 0.10f, true);
-                NativeMotionKit.BreatheScale(this, rect, 0.030f, 1.36f + index * 0.08f, true);
+                EnsureCanvasGroup(rect);
+                heroStickerTargets.Add(rect);
             }
+
+            CreateHomeHeroAccents(heroRect);
         }
 
         private void CreateCurrentSquad()
@@ -365,29 +391,28 @@ namespace EmojiWar.Client.UI.Home
 
         private void CreateModeCtas()
         {
-            var rankedButton = RescueStickerFactory.CreatePrimaryGoldButton(
+            var clashButton = RescueStickerFactory.CreatePrimaryGoldButton(
                 contentRoot,
-                "Play Ranked",
+                "Play Quick Clash",
                 new Vector2(560f, 90f));
-            var rankedRect = rankedButton.transform as RectTransform;
-            SetAnchors(rankedRect, new Vector2(0.05f, EmojiWarVisualStyle.Layout.PrimaryCtaBottom), new Vector2(0.95f, EmojiWarVisualStyle.Layout.PrimaryCtaTop));
-            PolishHomeButton(rankedButton, 34f, keepHighlight: true);
-            AddEnterTarget(rankedRect);
-            NativeMotionKit.BreatheScale(this, rankedRect, 0.025f, 1.05f, true);
-            WireButton(rankedButton, () => controller?.OpenBattlePlayers(), 0.07f);
+            var clashRect = clashButton.transform as RectTransform;
+            primaryCtaRoot = clashRect;
+            SetAnchors(clashRect, new Vector2(0.05f, 0.325f), new Vector2(0.95f, 0.425f));
+            PolishHomeButton(clashButton, 34f, keepHighlight: true);
+            AddEnterTarget(clashRect);
+            WireButton(clashButton, () => controller?.OpenEmojiClashPvp(), 0.07f);
         }
 
         private void CreateSecondaryActions()
         {
             var rootRect = CreateRect("HomeSecondaryActions", contentRoot);
-            SetAnchors(rootRect, new Vector2(0.05f, EmojiWarVisualStyle.Layout.SecondaryActionsBottom), new Vector2(0.95f, EmojiWarVisualStyle.Layout.SecondaryActionsTop));
+            secondaryActionsRoot = rootRect;
+            SetAnchors(rootRect, new Vector2(0.05f, 0.205f), new Vector2(0.95f, 0.305f));
             AddEnterTarget(rootRect);
 
-            CreateSecondaryButton(rootRect, "Quick Clash", new Vector2(0f, 0f), new Vector2(0.188f, 1f), () => controller?.OpenEmojiClash());
-            CreateSecondaryButton(rootRect, "Edit Squad", new Vector2(0.204f, 0f), new Vector2(0.392f, 1f), () => controller?.OpenDeckBuilder());
-            CreateSecondaryButton(rootRect, "Practice", new Vector2(0.408f, 0f), new Vector2(0.596f, 1f), () => controller?.OpenBattleBot());
-            CreateSecondaryButton(rootRect, "Codex", new Vector2(0.612f, 0f), new Vector2(0.80f, 1f), () => controller?.OpenCodex());
-            CreateSecondaryButton(rootRect, "Ranks", new Vector2(0.816f, 0f), new Vector2(1f, 1f), () => controller?.OpenLeaderboard());
+            CreateSecondaryButton(rootRect, "Clash Bot", new Vector2(0f, 0f), new Vector2(0.31f, 1f), () => controller?.OpenEmojiClash());
+            CreateSecondaryButton(rootRect, "Codex", new Vector2(0.345f, 0f), new Vector2(0.655f, 1f), () => controller?.OpenCodex());
+            CreateSecondaryButton(rootRect, "Ranks", new Vector2(0.69f, 0f), new Vector2(1f, 1f), () => controller?.OpenLeaderboard());
         }
 
         private void CreateSecondaryButton(RectTransform parent, string label, Vector2 min, Vector2 max, Action action)
@@ -398,6 +423,7 @@ namespace EmojiWar.Client.UI.Home
                 new Vector2(134f, 58f));
             SetAnchors(button.transform as RectTransform, min, max);
             PolishHomeButton(button, 18f, keepHighlight: false);
+            secondaryButtonTargets.Add(button.transform as RectTransform);
             WireButton(button, action, 0.06f);
         }
 
@@ -506,6 +532,37 @@ namespace EmojiWar.Client.UI.Home
             });
         }
 
+        private void CreateHomeHeroAccents(RectTransform heroRect)
+        {
+            if (heroRect == null)
+            {
+                return;
+            }
+
+            CreateHomeAccent(heroRect, "HomeSparkA", "+", new Vector2(0.28f, 0.73f), 18f, RescueStickerFactory.Palette.Aqua);
+            CreateHomeAccent(heroRect, "HomeSparkB", "*", new Vector2(0.70f, 0.76f), 17f, RescueStickerFactory.Palette.HotPink);
+            CreateHomeAccent(heroRect, "HomeSparkC", "+", new Vector2(0.17f, 0.58f), 14f, RescueStickerFactory.Palette.SunnyYellow);
+            CreateHomeAccent(heroRect, "HomeSparkD", "*", new Vector2(0.84f, 0.55f), 15f, RescueStickerFactory.Palette.Mint);
+        }
+
+        private void CreateHomeAccent(RectTransform parent, string name, string text, Vector2 anchor, float fontSize, Color color)
+        {
+            var accent = RescueStickerFactory.CreateLabel(
+                parent,
+                name,
+                text,
+                fontSize,
+                FontStyles.Bold,
+                color,
+                TextAlignmentOptions.Center,
+                anchor - new Vector2(0.025f, 0.025f),
+                anchor + new Vector2(0.025f, 0.025f));
+            accent.raycastTarget = false;
+            var rect = accent.rectTransform;
+            decorativeAccentTargets.Add(rect);
+            EnsureCanvasGroup(rect);
+        }
+
         private IEnumerator<WaitForSecondsRealtime> InvokeAfter(float delay, Action action)
         {
             yield return new WaitForSecondsRealtime(Mathf.Max(0f, delay));
@@ -514,17 +571,212 @@ namespace EmojiWar.Client.UI.Home
 
         private void PlayEnterMotion()
         {
-            for (var index = 0; index < enterTargets.Count; index++)
+            CancelHomeMotion();
+            PrepareHomeEntranceState();
+            homeMotionVersion++;
+            homeEntranceCoroutine = StartCoroutine(PlayHomeEntrance(homeMotionVersion));
+        }
+
+        private void CancelHomeMotion()
+        {
+            homeMotionVersion++;
+            if (homeEntranceCoroutine != null)
             {
-                var target = enterTargets[index];
-                if (target == null)
+                StopCoroutine(homeEntranceCoroutine);
+                homeEntranceCoroutine = null;
+            }
+        }
+
+        private void PrepareHomeEntranceState()
+        {
+            PrepareHomeTarget(headerRoot, 1f);
+            PrepareHomeTarget(heroTitleStackRoot, 0.88f);
+            PrepareHomeTarget(primaryCtaRoot, 0.88f);
+            PrepareHomeTarget(secondaryActionsRoot, 1f);
+
+            foreach (var sticker in heroStickerTargets)
+            {
+                PrepareHomeTarget(sticker, 0.82f);
+            }
+
+            foreach (var button in secondaryButtonTargets)
+            {
+                PrepareHomeTarget(button, 0.94f);
+            }
+
+            foreach (var accent in decorativeAccentTargets)
+            {
+                PrepareHomeTarget(accent, 0.70f);
+            }
+        }
+
+        private void PrepareHomeTarget(RectTransform target, float scale)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            var group = EnsureCanvasGroup(target);
+            if (group == null)
+            {
+                return;
+            }
+
+            group.alpha = 0f;
+            target.localScale = Vector3.one;
+        }
+
+        private IEnumerator PlayHomeEntrance(int version)
+        {
+            if (headerRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, headerRoot, EnsureCanvasGroup(headerRoot), new Vector2(0f, 18f), 0.22f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.08f);
+            if (!IsHomeMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            for (var index = 0; index < heroStickerTargets.Count; index++)
+            {
+                var sticker = heroStickerTargets[index];
+                if (sticker == null)
                 {
                     continue;
                 }
 
-                var group = target.GetComponent<CanvasGroup>() ?? target.gameObject.AddComponent<CanvasGroup>();
-                NativeMotionKit.SlideFadeIn(this, target, group, new Vector2(0f, -22f + index * -2f), 0.30f + index * 0.025f);
+                NativeMotionKit.PopIn(this, sticker, EnsureCanvasGroup(sticker), 0.20f + index * 0.018f, 0.70f);
             }
+
+            foreach (var accent in decorativeAccentTargets)
+            {
+                if (accent != null)
+                {
+                    NativeMotionKit.PopIn(this, accent, EnsureCanvasGroup(accent), 0.18f, 0.68f);
+                    NativeMotionKit.PunchScale(this, accent, 0.10f, 0.18f);
+                }
+            }
+
+            yield return new WaitForSecondsRealtime(0.13f);
+            if (!IsHomeMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (heroTitleStackRoot != null)
+            {
+                NativeMotionKit.StampSlam(this, heroTitleStackRoot, 1.08f, 0.24f);
+                var group = EnsureCanvasGroup(heroTitleStackRoot);
+                if (group != null)
+                {
+                    group.alpha = 1f;
+                }
+            }
+
+            yield return new WaitForSecondsRealtime(0.16f);
+            if (!IsHomeMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (primaryCtaRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, primaryCtaRoot, EnsureCanvasGroup(primaryCtaRoot), new Vector2(0f, -28f), 0.24f);
+                yield return new WaitForSecondsRealtime(0.10f);
+                if (IsHomeMotionCurrent(version))
+                {
+                    NativeMotionKit.PunchScale(this, primaryCtaRoot, 0.055f, 0.16f);
+                }
+            }
+
+            yield return new WaitForSecondsRealtime(0.10f);
+            if (!IsHomeMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (secondaryActionsRoot != null)
+            {
+                var group = EnsureCanvasGroup(secondaryActionsRoot);
+                if (group != null)
+                {
+                    group.alpha = 1f;
+                }
+            }
+
+            for (var index = 0; index < secondaryButtonTargets.Count; index++)
+            {
+                var button = secondaryButtonTargets[index];
+                if (button != null)
+                {
+                    NativeMotionKit.SlideFadeIn(this, button, EnsureCanvasGroup(button), new Vector2(0f, -18f), 0.18f + index * 0.025f);
+                }
+            }
+
+            yield return new WaitForSecondsRealtime(0.12f);
+            if (!IsHomeMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            StartHomeIdleMotion();
+            homeEntranceCoroutine = null;
+        }
+
+        private bool IsHomeMotionCurrent(int version)
+        {
+            return root != null &&
+                   root.gameObject.activeInHierarchy &&
+                   homeMotionVersion == version &&
+                   gameObject.activeInHierarchy;
+        }
+
+        private void StartHomeIdleMotion()
+        {
+            for (var index = 0; index < heroStickerTargets.Count; index++)
+            {
+                var sticker = heroStickerTargets[index];
+                if (sticker == null)
+                {
+                    continue;
+                }
+
+                NativeMotionKit.IdleBob(this, sticker, 5.4f + index * 0.45f, 1.20f + index * 0.09f, true);
+                NativeMotionKit.BreatheScale(this, sticker, 0.018f + index * 0.0015f, 1.32f + index * 0.07f, true);
+            }
+
+            if (primaryCtaRoot != null)
+            {
+                NativeMotionKit.BreatheScale(this, primaryCtaRoot, 0.012f, 1.42f, true);
+            }
+
+            for (var index = 0; index < decorativeAccentTargets.Count; index++)
+            {
+                var accent = decorativeAccentTargets[index];
+                if (accent != null)
+                {
+                    NativeMotionKit.IdleBob(this, accent, 1.4f + index * 0.35f, 1.6f + index * 0.12f, true);
+                }
+            }
+        }
+
+        private static CanvasGroup EnsureCanvasGroup(Component target)
+        {
+            if (target == null)
+            {
+                return null;
+            }
+
+            var group = target.GetComponent<CanvasGroup>();
+            if (group == null)
+            {
+                group = target.gameObject.AddComponent<CanvasGroup>();
+            }
+
+            return group;
         }
 
         private IReadOnlyList<EmojiId> ResolveCurrentSquad()

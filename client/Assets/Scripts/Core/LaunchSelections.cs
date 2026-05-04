@@ -13,11 +13,14 @@ namespace EmojiWar.Client.Core
         private const string RankedResumeDeckIdKey = "emojiwar.ranked_resume_deck_id";
         private const string RankedResumeSquadKey = "emojiwar.ranked_resume_squad";
         private const string RankedResumeRequestedKey = "emojiwar.ranked_resume_requested";
+        private const string ClashPvpResumeMatchIdKey = "emojiwar.clash_pvp_resume_match_id";
+        private const string ClashPvpResumeRequestedKey = "emojiwar.clash_pvp_resume_requested";
 
         public const string PvpRanked = "pvp_ranked";
         public const string BotPractice = "bot_practice";
         public const string BotSmart = "bot_smart";
         public const string EmojiClashLocal = "emoji_clash_local";
+        public const string EmojiClashPvp = "emoji_clash_pvp";
         public const string DeckBuilderFlowEdit = "edit";
         public const string DeckBuilderFlowRankedEntry = "ranked_entry";
         public const string DeckBuilderFlowBotPracticeEntry = "bot_practice_entry";
@@ -31,7 +34,10 @@ namespace EmojiWar.Client.Core
 
         public static string GetSelectedMode()
         {
-            return PlayerPrefs.GetString(SelectedModeKey, BotPractice);
+            var selectedMode = PlayerPrefs.GetString(SelectedModeKey, EmojiClashLocal);
+            return selectedMode == PvpRanked || selectedMode == BotPractice || selectedMode == BotSmart
+                ? EmojiClashLocal
+                : selectedMode;
         }
 
         public static void SetDeckBuilderFlow(string flow)
@@ -83,6 +89,22 @@ namespace EmojiWar.Client.Core
             SetDeckBuilderFlow(DeckBuilderFlowEdit);
             ClearPendingSquad();
             ClearRankedResume();
+            ClearClashPvpResumeRequested();
+        }
+
+        public static void BeginEmojiClashPvp()
+        {
+            SetSelectedMode(EmojiClashPvp);
+            SetDeckBuilderFlow(DeckBuilderFlowEdit);
+            ClearPendingSquad();
+            ClearRankedResumeRequested();
+        }
+
+        public static void BeginClashPvpResume()
+        {
+            SetSelectedMode(EmojiClashPvp);
+            PlayerPrefs.SetInt(ClashPvpResumeRequestedKey, 1);
+            PlayerPrefs.Save();
         }
 
         public static void BeginDeckEdit()
@@ -131,6 +153,45 @@ namespace EmojiWar.Client.Core
                 playerDeckApiIds == null || playerDeckApiIds.Count == 0
                     ? string.Empty
                     : string.Join(",", playerDeckApiIds));
+            PlayerPrefs.Save();
+        }
+
+        public static void StoreClashPvpResume(string matchId)
+        {
+            if (string.IsNullOrWhiteSpace(matchId))
+            {
+                return;
+            }
+
+            PlayerPrefs.SetString(ClashPvpResumeMatchIdKey, matchId);
+            PlayerPrefs.Save();
+        }
+
+        public static bool HasClashPvpResume()
+        {
+            return !string.IsNullOrWhiteSpace(PlayerPrefs.GetString(ClashPvpResumeMatchIdKey, string.Empty));
+        }
+
+        public static bool ShouldResumeClashPvpMatch()
+        {
+            return PlayerPrefs.GetInt(ClashPvpResumeRequestedKey, 0) == 1 && HasClashPvpResume();
+        }
+
+        public static string GetClashPvpResumeMatchId()
+        {
+            return PlayerPrefs.GetString(ClashPvpResumeMatchIdKey, string.Empty);
+        }
+
+        public static void ClearClashPvpResumeRequested()
+        {
+            PlayerPrefs.DeleteKey(ClashPvpResumeRequestedKey);
+            PlayerPrefs.Save();
+        }
+
+        public static void ClearClashPvpResume()
+        {
+            PlayerPrefs.DeleteKey(ClashPvpResumeMatchIdKey);
+            PlayerPrefs.DeleteKey(ClashPvpResumeRequestedKey);
             PlayerPrefs.Save();
         }
 

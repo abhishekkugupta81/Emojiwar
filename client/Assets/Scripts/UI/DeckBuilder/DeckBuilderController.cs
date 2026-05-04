@@ -74,7 +74,7 @@ namespace EmojiWar.Client.UI.DeckBuilder
             v2FoundationReady = V2BootstrapGuard.EnsureReady(out v2FoundationMessage, requireSlides: true);
             isRankedEntryFlow = LaunchSelections.IsRankedEntryDeckBuilderFlow();
             isBotEntryFlow = LaunchSelections.IsBotEntryDeckBuilderFlow();
-            requiredSelectionCount = isBotEntryFlow ? 5 : 6;
+            requiredSelectionCount = LaunchSelections.GetDeckBuilderFlow() == LaunchSelections.DeckBuilderFlowBotSmartEntry ? 5 : 6;
             availableEmojiIds = EmojiIdUtility.LaunchRoster.ToArray();
             entryHintLine = BuildEntryHint();
             if (ShouldUseRuntimeLayout)
@@ -260,13 +260,17 @@ namespace EmojiWar.Client.UI.DeckBuilder
         public string RescueTitle => isRankedEntryFlow
             ? "Build Your Ranked Squad"
             : isBotEntryFlow
-                ? "Build Your Practice Squad"
+                ? LaunchSelections.GetDeckBuilderFlow() == LaunchSelections.DeckBuilderFlowBotSmartEntry
+                    ? "Build Your Smart Bot Squad"
+                    : "Build Your Practice Ban Squad"
                 : "Build Your Squad";
 
         public string RescueSubtitle => isRankedEntryFlow
             ? "Build your ranked squad first"
             : isBotEntryFlow
-                ? $"Pick {requiredSelectionCount} sticker fighters"
+                ? LaunchSelections.GetDeckBuilderFlow() == LaunchSelections.DeckBuilderFlowBotSmartEntry
+                    ? $"Pick {requiredSelectionCount} sticker fighters"
+                    : $"Pick {requiredSelectionCount} fighters for blind ban practice"
                 : $"Pick {requiredSelectionCount} sticker fighters";
 
         public bool TryAddEmoji(EmojiId emojiId)

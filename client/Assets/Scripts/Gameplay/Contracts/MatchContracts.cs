@@ -8,7 +8,8 @@ namespace EmojiWar.Client.Gameplay.Contracts
     {
         PvpRanked,
         BotPractice,
-        BotSmart
+        BotSmart,
+        EmojiClashPvp
     }
 
     [Serializable]
@@ -112,6 +113,10 @@ namespace EmojiWar.Client.Gameplay.Contracts
         public string[] botTeam = Array.Empty<string>();
         public string benchEmojiId = string.Empty;
         public string suggestedBan = string.Empty;
+        public string playerBannedEmojiId = string.Empty;
+        public string opponentBannedEmojiId = string.Empty;
+        public string[] playerFinalTeam = Array.Empty<string>();
+        public string[] opponentFinalTeam = Array.Empty<string>();
         public string rulesVersion = string.Empty;
         public string status = string.Empty;
         public string phase = string.Empty;
@@ -182,6 +187,12 @@ namespace EmojiWar.Client.Gameplay.Contracts
         public string status = string.Empty;
         public string phase = string.Empty;
         public string note = string.Empty;
+        public string playerBannedEmojiId = string.Empty;
+        public string opponentBannedEmojiId = string.Empty;
+        public string[] playerFinalTeam = Array.Empty<string>();
+        public string[] opponentFinalTeam = Array.Empty<string>();
+        public FormationDto playerFormation = new();
+        public FormationDto opponentFormation = new();
     }
 
     [Serializable]
@@ -220,6 +231,113 @@ namespace EmojiWar.Client.Gameplay.Contracts
 
     [Serializable]
     public sealed class CancelRankedQueueResponseDto
+    {
+        public bool cancelled;
+        public string matchId = string.Empty;
+        public string status = string.Empty;
+        public string note = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class QueueOrJoinClashRequestDto
+    {
+        public string userId = string.Empty;
+        public string matchId = string.Empty;
+        public bool forceFreshEntry;
+    }
+
+    [Serializable]
+    public sealed class QueueOrJoinClashResponseDto
+    {
+        public string status = string.Empty;
+        public string mode = string.Empty;
+        public string serverNow = string.Empty;
+        public string queueTicket = string.Empty;
+        public string matchId = string.Empty;
+        public string userId = string.Empty;
+        public string opponentUserId = string.Empty;
+        public string opponent_type = string.Empty;
+        public string bot_profile_id = string.Empty;
+        public string bot_fill_reason = string.Empty;
+        public string display_name_resolved = string.Empty;
+        public string avatar_key_resolved = string.Empty;
+        public string playerSide = string.Empty;
+        public string rulesVersion = string.Empty;
+        public string phase = string.Empty;
+        public int matchmaking_rating_at_queue;
+        public string queueStartedAt = string.Empty;
+        public string queueExpiresAt = string.Empty;
+        public int currentTurnIndex;
+        public int totalTurns;
+        public int[] turnValues = Array.Empty<int>();
+        public string turnDeadlineAt = string.Empty;
+        public int phaseTimeoutSecondsRemaining;
+        public int playerScore;
+        public int opponentScore;
+        public string[] playerUsedUnits = Array.Empty<string>();
+        public string[] opponentUsedUnits = Array.Empty<string>();
+        public int timeoutStrikesPlayer;
+        public int timeoutStrikesOpponent;
+        public ClashTurnRecordDto[] resolvedTurnHistory = Array.Empty<ClashTurnRecordDto>();
+        public bool playerPickLocked;
+        public bool opponentPickLocked;
+        public string winner = string.Empty;
+        public string finalOutcome = string.Empty;
+        public string finishReason = string.Empty;
+        public string note = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class ClashTurnRecordDto
+    {
+        public int turnNumber;
+        public int turnValue;
+        public string playerUnitKey = string.Empty;
+        public string opponentUnitKey = string.Empty;
+        public bool playerTimedOut;
+        public bool opponentTimedOut;
+        public string playerTimeoutBurnUnitKey = string.Empty;
+        public string opponentTimeoutBurnUnitKey = string.Empty;
+        public int playerCombatPower;
+        public int opponentCombatPower;
+        public string outcome = string.Empty;
+        public int playerScoreAfter;
+        public int opponentScoreAfter;
+        public string reason = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class SubmitClashPickRequestDto
+    {
+        public string matchId = string.Empty;
+        public string playerId = string.Empty;
+        public int turnNumber;
+        public string emojiId = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class SubmitClashPickResponseDto
+    {
+        public bool accepted;
+        public string matchId = string.Empty;
+        public string playerId = string.Empty;
+        public int turnNumber;
+        public string emojiId = string.Empty;
+        public string status = string.Empty;
+        public string phase = string.Empty;
+        public bool opponentReady;
+        public string note = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class CancelClashQueueRequestDto
+    {
+        public string userId = string.Empty;
+        public string matchId = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class CancelClashQueueResponseDto
     {
         public bool cancelled;
         public string matchId = string.Empty;

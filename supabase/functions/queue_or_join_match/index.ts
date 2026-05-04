@@ -299,9 +299,17 @@ Deno.serve(async (request) => {
       }
     }
 
+    const activeOnlineRows = await selectRows<MatchRow>(
+      `matches?select=id,mode,updated_at,rules_version,status,player_a,player_b,winner,deck_a,deck_b,bans,current_state&mode=in.(pvp_ranked,emoji_clash_pvp)&status=in.(queued,banning,formation,pick,resolving)&or=(player_a.eq.${requestUserId},player_b.eq.${requestUserId})&order=updated_at.desc&limit=5`,
+    );
+    const activeClash = activeOnlineRows.find((match) => match.mode === "emoji_clash_pvp");
+    if (activeClash) {
+      return jsonResponse({ error: "You already have an active Quick Clash PvP match or queue." }, 409);
+    }
+
     if (!forceFreshEntry) {
       const existingActiveMatches = await selectRows<MatchRow>(
-        `matches?select=id,mode,updated_at,rules_version,status,player_a,player_b,winner,deck_a,deck_b,bans,current_state&mode=eq.pvp_ranked&status=in.(banning,formation)&or=(player_a.eq.${requestUserId},player_b.eq.${requestUserId})&order=created_at.desc&limit=5`,
+        `matches?select=id,mode,updated_at,rules_version,status,player_a,player_b,winner,deck_a,deck_b,bans,current_state&mode=eq.pvp_ranked&status=in.(banning,formation,resolving)&or=(player_a.eq.${requestUserId},player_b.eq.${requestUserId})&order=created_at.desc&limit=5`,
       );
       for (const activeMatch of existingActiveMatches) {
         const refreshed = await advanceTimedOutMatchIfNeeded(activeMatch);

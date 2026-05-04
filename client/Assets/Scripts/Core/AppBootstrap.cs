@@ -98,6 +98,33 @@ namespace EmojiWar.Client.Core
             yield return DeckSyncService.SaveActiveDeck(SessionState, ActiveDeckService, emojiIds, onCompleted);
         }
 
+        public IEnumerator EnsureOnlineSession(System.Action<bool> onCompleted)
+        {
+            if (supabaseConfig == null || !supabaseConfig.IsConfigured)
+            {
+                onCompleted?.Invoke(false);
+                yield break;
+            }
+
+            var hasOnlineSession = HasUsableAccessToken();
+            if (!hasOnlineSession && !string.IsNullOrWhiteSpace(SessionState.RefreshToken))
+            {
+                yield return RefreshAnonymousSession(success => hasOnlineSession = success);
+            }
+
+            if (!hasOnlineSession && !SessionState.HasSession)
+            {
+                yield return CreateAnonymousSession(success => hasOnlineSession = success);
+            }
+
+            if (hasOnlineSession)
+            {
+                SaveSession();
+            }
+
+            onCompleted?.Invoke(hasOnlineSession);
+        }
+
         public IEnumerator RecoverSessionAfterUnauthorized(System.Action<bool> onCompleted = null)
         {
             if (isRecoveringSession)
@@ -121,12 +148,21 @@ namespace EmojiWar.Client.Core
 
             isRecoveringSession = true;
 
-            SessionState.AccessToken = string.Empty;
-            SessionState.RefreshToken = string.Empty;
-            SessionState.ExpiresAtUnix = 0;
-
             var recovered = false;
-            yield return CreateAnonymousSession(success => recovered = success);
+            if (!string.IsNullOrWhiteSpace(SessionState.RefreshToken))
+            {
+                SessionState.AccessToken = string.Empty;
+                SessionState.ExpiresAtUnix = 0;
+                yield return RefreshAnonymousSession(success => recovered = success);
+            }
+
+            if (!recovered)
+            {
+                SessionState.AccessToken = string.Empty;
+                SessionState.RefreshToken = string.Empty;
+                SessionState.ExpiresAtUnix = 0;
+                yield return CreateAnonymousSession(success => recovered = success);
+            }
 
             if (recovered)
             {

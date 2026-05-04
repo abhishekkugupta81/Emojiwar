@@ -16,6 +16,7 @@ namespace EmojiWar.Client.UI.Match
 
         private RectTransform root;
         private RectTransform contentRoot;
+        private RectTransform queueViewRoot;
         private RectTransform turnViewRoot;
         private RectTransform resultViewRoot;
         private RectTransform boardGridRoot;
@@ -28,8 +29,23 @@ namespace EmojiWar.Client.UI.Match
         private RectTransform momentumRivalFill;
         private RectTransform recapListRoot;
         private RectTransform resultTurnsRoot;
-        private RectTransform resultHeroDecorRoot;
+        private RectTransform resultHeroBlockRoot;
+        private RectTransform resultHeroBackDecorRoot;
+        private RectTransform resultHeroFighterLayerRoot;
         private RectTransform resultHeroScoreCardRoot;
+        private RectTransform resultRecapSurfaceRoot;
+        private RectTransform resultTimelineSurfaceRoot;
+        private RectTransform resultActionsRoot;
+        private RectTransform queueHeroPanelRoot;
+        private RectTransform queueLiveStripRoot;
+        private RectTransform queueLiveStripSweepRoot;
+        private RectTransform queueTitleRoot;
+        private RectTransform queueVsRoot;
+        private RectTransform queuePlayerStickerRoot;
+        private RectTransform queueRivalMysteryRoot;
+        private RectTransform queueMetaPanelRoot;
+        private RectTransform queueSearchSweepRoot;
+        private RectTransform queueHomeButtonRoot;
         private RectTransform activePlayerCardRoot;
         private RectTransform activeRivalCardRoot;
         private RectTransform activeClashCoreRoot;
@@ -37,6 +53,11 @@ namespace EmojiWar.Client.UI.Match
         private RectTransform activeBenchLaneRoot;
         private Coroutine clashSequenceCoroutine;
         private Coroutine deferredTurnBindCoroutine;
+        private Coroutine resultEntranceCoroutine;
+        private Coroutine queueEntranceCoroutine;
+        private Coroutine queueDotsCoroutine;
+        private Coroutine queueSweepCoroutine;
+        private Coroutine queueHandoffCoroutine;
         private bool isBenchDragActive;
         private bool isSummonHoverActive;
         private bool activePlayerSlotEmpty;
@@ -56,8 +77,19 @@ namespace EmojiWar.Client.UI.Match
         private bool pendingSummonWasDrag;
         private readonly List<GameObject> activeClashCinematicObjects = new();
         private readonly Dictionary<CanvasGroup, float> trackedCardFighterAlphas = new();
+        private readonly Dictionary<string, RectTransform> activeBenchVisualsByUnit = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Sprite> clashVfxSpriteCache = new(StringComparer.OrdinalIgnoreCase);
         private Material clashVfxAlphaTintMaterial;
+        private bool clashVfxAlphaTintShaderUnavailable;
+        private string lastLockedStampMotionKey = string.Empty;
+        private string lastActiveTurnChipMotionKey = string.Empty;
+        private string lastScoreRevealMotionKey = string.Empty;
+        private string lastFinalTurnMotionKey = string.Empty;
+        private string lastResultEntranceKey = string.Empty;
+        private string activeQueueMotionKey = string.Empty;
+        private int resultEntranceVersion;
+        private int queueMotionVersion;
+        private readonly List<RectTransform> resultHeroFighterRects = new();
 
         private static readonly Vector2 BattleBenchHitTileSize = new(168f, 122f);
         private static readonly Vector2 BattleBenchVisualSize = new(154f, 110f);
@@ -95,6 +127,12 @@ namespace EmojiWar.Client.UI.Match
         private const float ImmediateSummonLandingSeconds = 0.18f;
         private const float SuppressPlayerEntryDropSeconds = 0.90f;
         private const float SummonTransitionLockSeconds = 0.46f;
+        private const float BenchTapPunchAmount = 0.085f;
+        private const float BenchTapPunchSeconds = 0.14f;
+        private const float LockedStampSlamSeconds = 0.20f;
+        private const float ScoreRevealPunchAmount = 0.085f;
+        private const float ScoreRevealPunchSeconds = 0.18f;
+        private const float RivalRevealAnticipationSeconds = 0.18f;
 
         private TMP_Text topEyebrowLabel;
         private TMP_Text topTitleLabel;
@@ -104,18 +142,90 @@ namespace EmojiWar.Client.UI.Match
         private TMP_Text outcomeLabel;
         private TMP_Text reasonLabel;
         private TMP_Text autoAdvanceHintLabel;
+        private TMP_Text queueTitleLabel;
+        private TMP_Text queueStatusLabel;
+        private TMP_Text queueTicketLabel;
+        private TMP_Text queueTimerLabel;
         private TMP_Text resultOutcomeLabel;
+        private RectTransform resultOutcomeArtRoot;
+        private Image resultOutcomeArtImage;
         private TMP_Text resultScoreLabel;
+        private TMP_Text resultScoreSupportLabel;
 
         private Button turnHomeButton;
+        private Button queueHomeButton;
         private Button resultPlayAgainButton;
         private Button resultHomeButton;
-        private Button resultEditButton;
 
         private Action<string> onPick;
         private Action onHome;
         private Action onEditSquad;
         private Action onPlayAgain;
+
+        public void BindQueue(
+            string queueTicket,
+            int secondsRemaining,
+            string note,
+            Action homeAction)
+        {
+            ClearPendingSummonState(true);
+            ResetQuickClashMotionReplayGuards();
+            CancelResultEntrance(true);
+            onHome = homeAction;
+            onPick = null;
+            onEditSquad = null;
+            onPlayAgain = null;
+
+            BuildOnce();
+            queueViewRoot.gameObject.SetActive(true);
+            turnViewRoot.gameObject.SetActive(false);
+            resultViewRoot.gameObject.SetActive(false);
+
+            topEyebrowLabel.text = "QUICK PLAY";
+            topTitleLabel.text = "Quick Clash";
+            turnStatusLabel.text = "LIVE MATCHMAKING";
+            turnValueLabel.text = "ONLINE";
+
+            queueTicketLabel.text = string.IsNullOrWhiteSpace(queueTicket)
+                ? "Match ticket ready"
+                : $"Match ticket {ShortQueueId(queueTicket)}";
+            queueTimerLabel.text = secondsRemaining > 0
+                ? $"Queue expires in {secondsRemaining}s"
+                : "Waiting for rival";
+            queueStatusLabel.text = ResolveQueueStatusCopy(note);
+
+            WireButton(queueHomeButton, () => onHome?.Invoke(), 0.05f);
+            AnimateQueueView(BuildQueueMotionKey(queueTicket));
+        }
+
+        public void PlayQueueMatchFoundHandoff(Action completeAction)
+        {
+            if (queueViewRoot == null || !queueViewRoot.gameObject.activeInHierarchy || !gameObject.activeInHierarchy)
+            {
+                completeAction?.Invoke();
+                return;
+            }
+
+            if (queueHandoffCoroutine != null)
+            {
+                return;
+            }
+
+            queueMotionVersion++;
+            if (queueDotsCoroutine != null)
+            {
+                StopCoroutine(queueDotsCoroutine);
+                queueDotsCoroutine = null;
+            }
+
+            if (queueSweepCoroutine != null)
+            {
+                StopCoroutine(queueSweepCoroutine);
+                queueSweepCoroutine = null;
+            }
+
+            queueHandoffCoroutine = StartCoroutine(PlayQueueMatchFoundHandoffRoutine(queueMotionVersion, completeAction));
+        }
 
         public void BindTurn(
             EmojiClashTurnViewModel model,
@@ -138,12 +248,24 @@ namespace EmojiWar.Client.UI.Match
             Action homeAction,
             Action editSquadAction)
         {
+            CancelQueueMotion();
             onPick = pickAction;
             onHome = homeAction;
             onEditSquad = editSquadAction;
             onPlayAgain = null;
+            CancelResultEntrance(true);
+
+            if (model != null &&
+                model.TurnNumber <= 1 &&
+                !model.IsLocked &&
+                !model.IsResolved &&
+                string.IsNullOrWhiteSpace(model.PlayerPickKey))
+            {
+                ResetQuickClashMotionReplayGuards();
+            }
 
             BuildOnce();
+            queueViewRoot.gameObject.SetActive(false);
             turnViewRoot.gameObject.SetActive(true);
             resultViewRoot.gameObject.SetActive(false);
 
@@ -177,31 +299,54 @@ namespace EmojiWar.Client.UI.Match
             Action homeAction,
             Action editSquadAction)
         {
+            CancelQueueMotion();
             ClearPendingSummonState(true);
+            ResetQuickClashMotionReplayGuards();
+            CancelResultEntrance(false);
             onPlayAgain = playAgainAction;
             onHome = homeAction;
             onEditSquad = editSquadAction;
             onPick = null;
 
             BuildOnce();
+            queueViewRoot.gameObject.SetActive(false);
             turnViewRoot.gameObject.SetActive(false);
             resultViewRoot.gameObject.SetActive(true);
+            ResetResultMotionState();
 
             topEyebrowLabel.text = "QUICK PLAY";
             topTitleLabel.text = "Emoji Clash";
-            turnStatusLabel.text = $"Turn {Mathf.Max(1, model?.TurnLines?.Length ?? 5)} / {Mathf.Max(1, model?.TurnLines?.Length ?? 5)}";
-            turnValueLabel.text = "FINAL TURN";
+            turnStatusLabel.text = string.Empty;
+            turnValueLabel.text = string.Empty;
             resultOutcomeLabel.text = model?.OutcomeTitle ?? "DRAW";
             resultOutcomeLabel.color = ResolveResultAccent(model?.OutcomeTitle);
-            resultScoreLabel.text = FormatResultScore(model?.FinalScoreLine ?? "Final Score: You 0 - 0 Rival");
+            ApplyResultOutcomeArt(model?.OutcomeTitle);
+            var parsedScore = ParseResultScore(model?.FinalScoreLine ?? "Final Score: You 0 - 0 Rival");
+            resultScoreLabel.richText = true;
+            resultScoreLabel.text = FormatResultScoreRichText(parsedScore.mainScore);
+            if (resultScoreSupportLabel != null)
+            {
+                resultScoreSupportLabel.text = parsedScore.supportLine;
+            }
+
+            var playAgainLabel = resultPlayAgainButton != null
+                ? resultPlayAgainButton.transform.Find("PlayAgainLabel")?.GetComponent<TMP_Text>()
+                : null;
+            if (playAgainLabel != null)
+            {
+                playAgainLabel.text = string.IsNullOrWhiteSpace(model?.PrimaryActionLabel)
+                    ? "PLAY AGAIN"
+                    : model.PrimaryActionLabel;
+            }
+
+            ApplyResultStateMood(model);
             RefreshResultHeroDecor(model);
             RebuildResultRecaps(model?.RecapLines ?? Array.Empty<string>());
             RebuildResultTurns(model?.TurnLines ?? Array.Empty<string>());
             WireButton(resultPlayAgainButton, () => onPlayAgain?.Invoke(), 0.05f);
             WireButton(resultHomeButton, () => onHome?.Invoke(), 0.05f);
-            WireButton(resultEditButton, () => onEditSquad?.Invoke(), 0.05f);
 
-            NativeMotionKit.PopIn(this, resultViewRoot, resultViewRoot.GetComponent<CanvasGroup>(), 0.24f, 0.92f);
+            AnimateResultSections(model);
         }
 
         public void Hide()
@@ -209,6 +354,8 @@ namespace EmojiWar.Client.UI.Match
             ClearClashCinematicLayer(true);
             ClearPendingSummonState(true);
             CancelDeferredTurnBind();
+            CancelQueueMotion();
+            CancelResultEntrance(true);
             if (clashSequenceCoroutine != null)
             {
                 StopCoroutine(clashSequenceCoroutine);
@@ -228,17 +375,39 @@ namespace EmojiWar.Client.UI.Match
 
             root = null;
             contentRoot = null;
+            queueViewRoot = null;
             turnViewRoot = null;
             resultViewRoot = null;
+            queueHeroPanelRoot = null;
+            queueLiveStripRoot = null;
+            queueLiveStripSweepRoot = null;
+            queueTitleRoot = null;
+            queueVsRoot = null;
+            queuePlayerStickerRoot = null;
+            queueRivalMysteryRoot = null;
+            queueMetaPanelRoot = null;
+            queueSearchSweepRoot = null;
+            queueHomeButtonRoot = null;
             boardGridRoot = null;
             benchStickerVisualLayer = null;
             clashStageRoot = null;
             clashCinematicLayer = null;
             momentumTrackRoot = null;
+            queueHomeButton = null;
+            queueStatusLabel = null;
+            queueTicketLabel = null;
+            queueTimerLabel = null;
             momentumPlayerFill = null;
             momentumRivalFill = null;
             recapListRoot = null;
             resultTurnsRoot = null;
+            resultHeroBlockRoot = null;
+            resultHeroBackDecorRoot = null;
+            resultHeroFighterLayerRoot = null;
+            resultHeroScoreCardRoot = null;
+            resultRecapSurfaceRoot = null;
+            resultTimelineSurfaceRoot = null;
+            resultActionsRoot = null;
             activePlayerCardRoot = null;
             activeRivalCardRoot = null;
             activeClashCoreRoot = null;
@@ -261,17 +430,22 @@ namespace EmojiWar.Client.UI.Match
             outcomeLabel = null;
             reasonLabel = null;
             autoAdvanceHintLabel = null;
+            queueTitleLabel = null;
             resultOutcomeLabel = null;
+            resultOutcomeArtRoot = null;
+            resultOutcomeArtImage = null;
             resultScoreLabel = null;
+            resultScoreSupportLabel = null;
             turnHomeButton = null;
             resultPlayAgainButton = null;
             resultHomeButton = null;
-            resultEditButton = null;
             isBenchDragActive = false;
             isSummonHoverActive = false;
             activePlayerSlotEmpty = false;
             activeRivalHidden = false;
             turnValueLabels.Clear();
+            resultHeroFighterRects.Clear();
+            activeBenchVisualsByUnit.Clear();
         }
 
         private void OnDisable()
@@ -301,6 +475,7 @@ namespace EmojiWar.Client.UI.Match
             dragLayerRoot.SetAsLastSibling();
 
             CreateHeader();
+            CreateQueueView();
             CreateTurnView();
             CreateResultView();
         }
@@ -353,6 +528,227 @@ namespace EmojiWar.Client.UI.Match
                 TextAlignmentOptions.Right,
                 new Vector2(0.58f, 0.56f),
                 new Vector2(1f, 1f));
+        }
+
+        private void CreateQueueView()
+        {
+            queueViewRoot = CreateRect("QueueView", contentRoot);
+            Stretch(queueViewRoot);
+            queueViewRoot.gameObject.AddComponent<CanvasGroup>();
+
+            RescueStickerFactory.CreateBlob(queueViewRoot, "QueueGlowAqua", RescueStickerFactory.Palette.Aqua, new Vector2(0f, 70f), new Vector2(620f, 620f), 0.16f);
+            RescueStickerFactory.CreateBlob(queueViewRoot, "QueueGlowPink", RescueStickerFactory.Palette.HotPink, new Vector2(156f, 170f), new Vector2(380f, 360f), 0.12f);
+            RescueStickerFactory.CreateBlob(queueViewRoot, "QueueGlowGold", RescueStickerFactory.Palette.SunnyYellow, new Vector2(-172f, 135f), new Vector2(300f, 260f), 0.10f);
+
+            var hero = RescueStickerFactory.CreateGlassPanel(
+                queueViewRoot,
+                "QueueHeroPanel",
+                Vector2.zero,
+                strong: true);
+            var heroRect = hero.GetComponent<RectTransform>();
+            queueHeroPanelRoot = heroRect;
+            SetAnchors(heroRect, new Vector2(0.06f, 0.315f), new Vector2(0.94f, 0.805f));
+
+            RescueStickerFactory.CreateBlob(heroRect, "QueueHeroHalo", RescueStickerFactory.Palette.ElectricPurple, Vector2.zero, new Vector2(520f, 330f), 0.18f);
+            RescueStickerFactory.CreateBlob(heroRect, "QueueHeroCore", RescueStickerFactory.Palette.Aqua, new Vector2(0f, -12f), new Vector2(360f, 220f), 0.15f);
+
+            queueLiveStripRoot = CreateQueueLiveStrip(heroRect);
+            SetAnchors(queueLiveStripRoot, new Vector2(0.18f, 0.895f), new Vector2(0.82f, 0.955f));
+
+            var title = RescueStickerFactory.CreateLabel(
+                heroRect,
+                "QueueTitle",
+                "Finding Rival",
+                58f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SoftWhite,
+                TextAlignmentOptions.Center,
+                new Vector2(0.08f, 0.72f),
+                new Vector2(0.92f, 0.91f));
+            queueTitleLabel = title;
+            queueTitleRoot = title.rectTransform;
+            title.enableAutoSizing = true;
+            title.fontSizeMax = 58f;
+            title.fontSizeMin = 38f;
+            var titleShadow = title.gameObject.AddComponent<Shadow>();
+            titleShadow.effectColor = WithAlpha(RescueStickerFactory.Palette.InkPurple, 0.70f);
+            titleShadow.effectDistance = new Vector2(0f, -5f);
+
+            var versus = RescueStickerFactory.CreateLabel(
+                heroRect,
+                "QueueVs",
+                "VS",
+                46f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SunnyYellow,
+                TextAlignmentOptions.Center,
+                new Vector2(0.39f, 0.40f),
+                new Vector2(0.61f, 0.58f));
+            queueVsRoot = versus.rectTransform;
+            versus.characterSpacing = 1.2f;
+
+            var leftFighter = RescueStickerFactory.CreateClashFighter(
+                heroRect,
+                "wind",
+                "Wind",
+                UnitIconLibrary.GetPrimaryColor("wind"),
+                new Vector2(206f, 206f));
+            queuePlayerStickerRoot = leftFighter.GetComponent<RectTransform>();
+            SetAnchors(queuePlayerStickerRoot, new Vector2(0.055f, 0.285f), new Vector2(0.385f, 0.685f));
+
+            queueRivalMysteryRoot = CreateQueueMysterySticker(heroRect);
+            SetAnchors(queueRivalMysteryRoot, new Vector2(0.615f, 0.285f), new Vector2(0.945f, 0.685f));
+
+            queueStatusLabel = RescueStickerFactory.CreateLabel(
+                heroRect,
+                "QueueStatus",
+                "Finding another player for a hidden-pick sticker clash.",
+                21f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SoftWhite,
+                TextAlignmentOptions.Center,
+                new Vector2(0.08f, 0.17f),
+                new Vector2(0.92f, 0.27f));
+            queueStatusLabel.enableAutoSizing = true;
+            queueStatusLabel.fontSizeMax = 21f;
+            queueStatusLabel.fontSizeMin = 14f;
+
+            var meta = RescueStickerFactory.CreateGlassPanel(
+                queueViewRoot,
+                "QueueMetaPanel",
+                Vector2.zero,
+                strong: false);
+            var metaRect = meta.GetComponent<RectTransform>();
+            queueMetaPanelRoot = metaRect;
+            SetAnchors(metaRect, new Vector2(0.11f, 0.185f), new Vector2(0.89f, 0.285f));
+
+            queueSearchSweepRoot = CreateRect("QueueSearchSweep", metaRect);
+            SetAnchors(queueSearchSweepRoot, new Vector2(0.03f, 0.08f), new Vector2(0.23f, 0.92f));
+            var sweepImage = queueSearchSweepRoot.gameObject.AddComponent<Image>();
+            sweepImage.raycastTarget = false;
+            sweepImage.color = WithAlpha(RescueStickerFactory.Palette.SoftWhite, 0.10f);
+            EnsureCanvasGroup(queueSearchSweepRoot).alpha = 0f;
+
+            queueTicketLabel = RescueStickerFactory.CreateLabel(
+                metaRect,
+                "QueueTicket",
+                "Match ticket ready",
+                14f,
+                FontStyles.Bold,
+                WithAlpha(RescueStickerFactory.Palette.Mint, 0.82f),
+                TextAlignmentOptions.Center,
+                new Vector2(0.06f, 0.52f),
+                new Vector2(0.94f, 0.92f));
+
+            queueTimerLabel = RescueStickerFactory.CreateLabel(
+                metaRect,
+                "QueueTimer",
+                "Waiting for rival",
+                16f,
+                FontStyles.Bold,
+                WithAlpha(RescueStickerFactory.Palette.SunnyYellow, 0.94f),
+                TextAlignmentOptions.Center,
+                new Vector2(0.06f, 0.12f),
+                new Vector2(0.94f, 0.50f));
+
+            var actions = CreateRect("QueueActions", queueViewRoot);
+            SetAnchors(actions, new Vector2(0.07f, 0.040f), new Vector2(0.93f, 0.112f));
+            queueHomeButton = RescueStickerFactory.CreateSecondaryActionButton(
+                actions,
+                "Home",
+                new Vector2(220f, 58f));
+            queueHomeButtonRoot = queueHomeButton.transform as RectTransform;
+            SetAnchors(queueHomeButtonRoot, new Vector2(0.32f, 0.08f), new Vector2(0.68f, 0.92f));
+            AddResultSecondaryButtonFlair(queueHomeButton, RescueStickerFactory.Palette.Aqua);
+
+            queueViewRoot.gameObject.SetActive(false);
+        }
+
+        private RectTransform CreateQueueLiveStrip(RectTransform parent)
+        {
+            var strip = RescueStickerFactory.CreateStatusChip(
+                parent,
+                "LIVE QUEUE  •  Searching for Rival",
+                WithAlpha(RescueStickerFactory.Palette.InkPurple, 0.62f),
+                RescueStickerFactory.Palette.Mint);
+            strip.name = "QueueLiveStrip";
+            var stripRect = strip.GetComponent<RectTransform>();
+            EnsureCanvasGroup(stripRect);
+            stripRect.sizeDelta = new Vector2(320f, 44f);
+
+            var label = strip.transform.Find("Label")?.GetComponent<TMP_Text>();
+            if (label != null)
+            {
+                label.fontSize = 16f;
+                label.enableAutoSizing = true;
+                label.fontSizeMin = 12f;
+                label.fontSizeMax = 16f;
+                label.characterSpacing = 0.6f;
+            }
+
+            queueLiveStripSweepRoot = CreateRect("QueueLiveStripSweep", stripRect);
+            SetAnchors(queueLiveStripSweepRoot, new Vector2(0.02f, 0.10f), new Vector2(0.16f, 0.90f));
+            var sweepImage = queueLiveStripSweepRoot.gameObject.AddComponent<Image>();
+            sweepImage.raycastTarget = false;
+            sweepImage.color = WithAlpha(RescueStickerFactory.Palette.SoftWhite, 0.12f);
+            EnsureCanvasGroup(queueLiveStripSweepRoot).alpha = 0f;
+            queueLiveStripSweepRoot.SetAsFirstSibling();
+
+            return stripRect;
+        }
+
+        private RectTransform CreateQueueMysterySticker(RectTransform parent)
+        {
+            var mystery = RescueStickerFactory.CreateArenaSurface(
+                parent,
+                "QueueRivalMystery",
+                new Color(0.07f, 0.07f, 0.20f, 0.88f),
+                RescueStickerFactory.Palette.ElectricPurple,
+                new Vector2(206f, 206f));
+            var mysteryRect = mystery.GetComponent<RectTransform>();
+            EnsureCanvasGroup(mysteryRect);
+
+            RescueStickerFactory.CreateBlob(
+                mysteryRect,
+                "QueueMysteryGlow",
+                RescueStickerFactory.Palette.ElectricPurple,
+                new Vector2(0f, 10f),
+                new Vector2(150f, 150f),
+                0.18f);
+            RescueStickerFactory.CreateBlob(
+                mysteryRect,
+                "QueueMysteryFloor",
+                RescueStickerFactory.Palette.Aqua,
+                new Vector2(0f, -58f),
+                new Vector2(118f, 28f),
+                0.18f);
+
+            var mark = RescueStickerFactory.CreateLabel(
+                mysteryRect,
+                "QueueMysteryMark",
+                "?",
+                108f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SoftWhite,
+                TextAlignmentOptions.Center,
+                new Vector2(0.18f, 0.28f),
+                new Vector2(0.82f, 0.76f));
+            var shadow = mark.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = WithAlpha(RescueStickerFactory.Palette.InkPurple, 0.80f);
+            shadow.effectDistance = new Vector2(0f, -5f);
+
+            RescueStickerFactory.CreateLabel(
+                mysteryRect,
+                "QueueMysteryTitle",
+                "Rival",
+                20f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SoftWhite,
+                TextAlignmentOptions.Center,
+                new Vector2(0.12f, 0.12f),
+                new Vector2(0.88f, 0.22f));
+
+            return mysteryRect;
         }
 
         private void CreateTurnView()
@@ -632,27 +1028,71 @@ namespace EmojiWar.Client.UI.Match
             Stretch(resultViewRoot);
             resultViewRoot.gameObject.AddComponent<CanvasGroup>();
 
-            var heroRect = RescueStickerFactory.CreateOpenHeroStage(resultViewRoot, "QuickResultHeroStage");
-            SetAnchors(heroRect, new Vector2(0.04f, 0.47f), new Vector2(0.96f, 0.88f));
+            var heroRect = CreateRect("QuickResultHeroStage", resultViewRoot);
+            SetAnchors(heroRect, new Vector2(0.025f, 0.405f), new Vector2(0.975f, 0.940f));
+
+            resultHeroBlockRoot = CreateRect("HeroResultBlock", heroRect);
+            Stretch(resultHeroBlockRoot);
+
+            resultHeroBackDecorRoot = CreateRect("HeroBackDecor", resultHeroBlockRoot);
+            Stretch(resultHeroBackDecorRoot);
+            var burst = RescueStickerFactory.CreateResultArtPanel(
+                resultHeroBackDecorRoot,
+                "HeroResultBurst",
+                "hero_result_burst",
+                Vector2.zero,
+                Color.clear);
+            var burstRect = burst.GetComponent<RectTransform>();
+            SetAnchors(burstRect, new Vector2(-0.050f, -0.090f), new Vector2(1.050f, 1.000f));
+            var burstImage = burst.GetComponent<Image>();
+            if (burstImage != null)
+            {
+                burstImage.preserveAspect = true;
+                burstImage.color = WithAlpha(Color.white, 0.74f);
+            }
+
+            resultHeroFighterLayerRoot = CreateRect("HeroFighterLayer", resultHeroBlockRoot);
+            Stretch(resultHeroFighterLayerRoot);
+
+            var scoreLayer = CreateRect("HeroScoreLayer", resultHeroBlockRoot);
+            Stretch(scoreLayer);
+
+            var bannerLayer = CreateRect("HeroBannerLayer", resultHeroBlockRoot);
+            Stretch(bannerLayer);
+
+            var scoreCard = RescueStickerFactory.CreateResultHeroScoreCard(scoreLayer, "Final Score", "You 0 - 0 Rival");
+            resultHeroScoreCardRoot = scoreCard.GetComponent<RectTransform>();
+            resultHeroScoreCardRoot.gameObject.AddComponent<CanvasGroup>();
+            SetAnchors(resultHeroScoreCardRoot, new Vector2(0.310f, 0.135f), new Vector2(0.690f, 0.535f));
+            resultScoreLabel = scoreCard.transform.Find("ScoreLine")?.GetComponent<TMP_Text>();
+            resultScoreSupportLabel = scoreCard.transform.Find("ScoreSupport")?.GetComponent<TMP_Text>();
+
+            CreateResultBannerPlate(bannerLayer);
 
             resultOutcomeLabel = RescueStickerFactory.CreateLabel(
-                heroRect,
+                bannerLayer,
                 "ResultOutcome",
                 "VICTORY",
-                82f,
+                96f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
                 TextAlignmentOptions.Center,
-                new Vector2(0.06f, 0.48f),
-                new Vector2(0.94f, 0.84f));
+                new Vector2(0.190f, 0.785f),
+                new Vector2(0.810f, 0.972f));
+            ApplyResultBannerTextTreatment(resultOutcomeLabel);
 
-            resultHeroDecorRoot = CreateRect("ResultHeroDecorRoot", heroRect);
-            SetAnchors(resultHeroDecorRoot, new Vector2(0f, 0f), new Vector2(1f, 0.96f));
-
-            var scoreCard = RescueStickerFactory.CreateResultHeroScoreCard(heroRect, "Final Score", "You 0 - 0 Rival");
-            resultHeroScoreCardRoot = scoreCard.GetComponent<RectTransform>();
-            SetAnchors(resultHeroScoreCardRoot, new Vector2(0.32f, 0.18f), new Vector2(0.68f, 0.44f));
-            resultScoreLabel = scoreCard.transform.Find("ScoreLine")?.GetComponent<TMP_Text>();
+            var outcomeArt = RescueStickerFactory.CreateResultArtPanel(
+                bannerLayer,
+                "ResultOutcomeArt",
+                "result_title_victory",
+                Vector2.zero,
+                Color.clear);
+            resultOutcomeArtRoot = outcomeArt.GetComponent<RectTransform>();
+            resultOutcomeArtImage = outcomeArt.GetComponent<Image>();
+            resultOutcomeArtImage.preserveAspect = true;
+            SetAnchors(resultOutcomeArtRoot, new Vector2(0.195f, 0.770f), new Vector2(0.805f, 0.990f));
+            resultOutcomeArtRoot.SetAsLastSibling();
+            resultOutcomeLabel.rectTransform.SetAsLastSibling();
 
             var recapSurface = RescueStickerFactory.CreateGlassPanel(
                 resultViewRoot,
@@ -660,13 +1100,16 @@ namespace EmojiWar.Client.UI.Match
                 Vector2.zero,
                 strong: true);
             var recapRect = recapSurface.GetComponent<RectTransform>();
-            SetAnchors(recapRect, new Vector2(0.045f, 0.29f), new Vector2(0.955f, 0.445f));
+            resultRecapSurfaceRoot = recapRect;
+            SetAnchors(recapRect, new Vector2(0.045f, 0.255f), new Vector2(0.955f, 0.372f));
+            RescueStickerFactory.TryApplyResultArt(recapSurface.GetComponent<Image>(), "result_panel_frame");
+            RescueStickerFactory.CreateBlob(recapRect, "RecapHeaderGlow", RescueStickerFactory.Palette.Aqua, new Vector2(-205f, 46f), new Vector2(300f, 52f), 0.06f);
 
             RescueStickerFactory.CreateLabel(
                 recapRect,
                 "RecapTitle",
                 "Clash Recap",
-                20f,
+                22f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
                 TextAlignmentOptions.Left,
@@ -674,9 +1117,9 @@ namespace EmojiWar.Client.UI.Match
                 new Vector2(0.42f, 0.96f));
 
             recapListRoot = CreateRect("RecapList", recapRect);
-            SetAnchors(recapListRoot, new Vector2(0.04f, 0.08f), new Vector2(0.96f, 0.78f));
+            SetAnchors(recapListRoot, new Vector2(0.04f, 0.08f), new Vector2(0.96f, 0.74f));
             var recapLayout = recapListRoot.gameObject.AddComponent<VerticalLayoutGroup>();
-            recapLayout.spacing = 8f;
+            recapLayout.spacing = 5f;
             recapLayout.childAlignment = TextAnchor.UpperLeft;
             recapLayout.childControlHeight = true;
             recapLayout.childControlWidth = true;
@@ -689,13 +1132,16 @@ namespace EmojiWar.Client.UI.Match
                 Vector2.zero,
                 strong: true);
             var turnsRect = turnsSurface.GetComponent<RectTransform>();
-            SetAnchors(turnsRect, new Vector2(0.045f, 0.12f), new Vector2(0.955f, 0.265f));
+            resultTimelineSurfaceRoot = turnsRect;
+            SetAnchors(turnsRect, new Vector2(0.045f, 0.103f), new Vector2(0.955f, 0.238f));
+            RescueStickerFactory.TryApplyResultArt(turnsSurface.GetComponent<Image>(), "result_panel_frame");
+            RescueStickerFactory.CreateBlob(turnsRect, "TimelineHeaderGlow", RescueStickerFactory.Palette.SunnyYellow, new Vector2(-198f, 48f), new Vector2(280f, 50f), 0.055f);
 
             RescueStickerFactory.CreateLabel(
                 turnsRect,
                 "TurnsTitle",
                 "Turn Timeline",
-                20f,
+                22f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
                 TextAlignmentOptions.Left,
@@ -705,7 +1151,7 @@ namespace EmojiWar.Client.UI.Match
             resultTurnsRoot = CreateRect("ResultTurns", turnsRect);
             SetAnchors(resultTurnsRoot, new Vector2(0.04f, 0.08f), new Vector2(0.96f, 0.82f));
             var turnsLayout = resultTurnsRoot.gameObject.AddComponent<VerticalLayoutGroup>();
-            turnsLayout.spacing = 6f;
+            turnsLayout.spacing = 5f;
             turnsLayout.childAlignment = TextAnchor.UpperLeft;
             turnsLayout.childControlHeight = true;
             turnsLayout.childControlWidth = true;
@@ -713,25 +1159,50 @@ namespace EmojiWar.Client.UI.Match
             turnsLayout.childForceExpandWidth = true;
 
             var actions = CreateRect("ResultActions", resultViewRoot);
-            SetAnchors(actions, new Vector2(0.045f, 0.025f), new Vector2(0.955f, 0.095f));
+            resultActionsRoot = actions;
+            SetAnchors(actions, new Vector2(0.045f, 0.018f), new Vector2(0.955f, 0.105f));
 
-            resultPlayAgainButton = RescueStickerFactory.CreatePrimaryGoldButton(
-                actions,
-                "Play Again",
-                new Vector2(320f, 68f));
-            SetAnchors(resultPlayAgainButton.transform as RectTransform, new Vector2(0f, 0f), new Vector2(0.48f, 1f));
+            resultPlayAgainButton = CreateResultPrimaryCta(actions);
+            SetAnchors(resultPlayAgainButton.transform as RectTransform, new Vector2(0f, 0f), new Vector2(0.68f, 1f));
 
             resultHomeButton = RescueStickerFactory.CreateSecondaryActionButton(
                 actions,
                 "Home",
-                new Vector2(160f, 58f));
-            SetAnchors(resultHomeButton.transform as RectTransform, new Vector2(0.52f, 0f), new Vector2(0.72f, 1f));
+                new Vector2(150f, 58f));
+            SetAnchors(resultHomeButton.transform as RectTransform, new Vector2(0.760f, 0.10f), new Vector2(0.920f, 0.90f));
+            AddResultSecondaryButtonFlair(resultHomeButton, RescueStickerFactory.Palette.Aqua);
+        }
 
-            resultEditButton = RescueStickerFactory.CreateSecondaryActionButton(
-                actions,
-                "Edit Squad",
-                new Vector2(200f, 58f));
-            SetAnchors(resultEditButton.transform as RectTransform, new Vector2(0.76f, 0f), new Vector2(1f, 1f));
+        private void CreateResultBannerPlate(RectTransform heroRect)
+        {
+            var bannerPlate = RescueStickerFactory.CreateResultArtPanel(
+                heroRect,
+                "ResultBannerPlate",
+                "result_banner_ribbon",
+                Vector2.zero,
+                WithAlpha(Color.Lerp(RescueStickerFactory.Palette.ElectricPurple, EmojiWarVisualStyle.Colors.Depth, 0.24f), 0.94f));
+            var bannerPlateRect = bannerPlate.GetComponent<RectTransform>();
+            SetAnchors(bannerPlateRect, new Vector2(0.095f, 0.755f), new Vector2(0.905f, 0.995f));
+
+            CreateResultSpark(heroRect, "BannerSparkA", "*", new Vector2(0.215f, 0.935f), 22f, RescueStickerFactory.Palette.SunnyYellow);
+            CreateResultSpark(heroRect, "BannerSparkB", "+", new Vector2(0.335f, 0.978f), 18f, RescueStickerFactory.Palette.Aqua);
+            CreateResultSpark(heroRect, "BannerSparkC", "*", new Vector2(0.785f, 0.925f), 20f, RescueStickerFactory.Palette.SunnyYellow);
+            CreateResultSpark(heroRect, "BannerSparkD", "+", new Vector2(0.680f, 0.972f), 18f, RescueStickerFactory.Palette.HotPink);
+        }
+
+        private void CreateResultSpark(RectTransform parent, string name, string text, Vector2 anchor, float fontSize, Color color)
+        {
+            var spark = RescueStickerFactory.CreateLabel(
+                parent,
+                name,
+                text,
+                fontSize,
+                FontStyles.Bold,
+                color,
+                TextAlignmentOptions.Center,
+                anchor - new Vector2(0.035f, 0.035f),
+                anchor + new Vector2(0.035f, 0.035f));
+            spark.raycastTarget = false;
         }
 
         private void RefreshTurnHeader(EmojiClashTurnViewModel model)
@@ -766,6 +1237,12 @@ namespace EmojiWar.Client.UI.Match
                         ? Color.Lerp(EmojiWarVisualStyle.Colors.GoldLight, RescueStickerFactory.Palette.Mint, 0.12f)
                         : new Color(0.18f, 0.16f, 0.42f, 0.72f);
                 }
+
+                if (isCurrent)
+                {
+                    TryPlayActiveTurnChipFeedback(model, label);
+                    TryPlayFinalTurnFeedback(model, label);
+                }
             }
         }
 
@@ -781,7 +1258,11 @@ namespace EmojiWar.Client.UI.Match
         private void RevealResolvedScoreBand(EmojiClashTurnViewModel model)
         {
             var scoreView = CreateCurrentScoreView(model);
-            ApplyScoreBand(scoreView.scoreSummary, scoreView.momentumNormalized, true);
+            ApplyScoreBand(scoreView.scoreSummary, scoreView.momentumNormalized, false);
+            if (!TryPlayScoreFlyBadge(model))
+            {
+                PlayScoreRevealPunch();
+            }
         }
 
         private void ApplyScoreBand(string scoreSummary, float momentumNormalized, bool punch)
@@ -810,7 +1291,7 @@ namespace EmojiWar.Client.UI.Match
             if (punch)
             {
                 NativeMotionKit.PunchScale(this, momentumTrackRoot, 0.035f, 0.16f);
-                NativeMotionKit.PunchScale(this, scoreLabel.rectTransform, 0.05f, 0.16f);
+                NativeMotionKit.PunchScale(this, scoreLabel.rectTransform, ScoreRevealPunchAmount, ScoreRevealPunchSeconds);
             }
         }
 
@@ -858,6 +1339,10 @@ namespace EmojiWar.Client.UI.Match
             clashSequenceVisibleUntilTime = 0f;
             ClearClashCinematicLayer(true);
             ClearExpiredPendingSummon();
+            if (model.IsResolved)
+            {
+                ClearPendingSummonState(true);
+            }
 
             ClearChildren(clashStageRoot);
             activePlayerCardRoot = null;
@@ -1054,6 +1539,8 @@ namespace EmojiWar.Client.UI.Match
                 }
             }
 
+            PlayLockedInStampIfNeeded(model, leftCard.GetComponent<RectTransform>());
+
             if (model.IsResolved)
             {
                 clashSequenceVisibleUntilTime = Time.unscaledTime +
@@ -1083,6 +1570,7 @@ namespace EmojiWar.Client.UI.Match
         {
             ClearChildren(boardGridRoot);
             ClearChildren(benchStickerVisualLayer);
+            activeBenchVisualsByUnit.Clear();
 
             for (var index = 0; index < model.BoardItems.Length; index++)
             {
@@ -1101,6 +1589,11 @@ namespace EmojiWar.Client.UI.Match
                 var visualRect = visual.GetComponent<RectTransform>();
                 PositionBattleBenchVisual(visualRect, index);
                 DisableRaycasts(visual);
+                var normalizedUnitKey = EmojiClashRules.NormalizeUnitKey(item.UnitKey);
+                if (!string.IsNullOrWhiteSpace(normalizedUnitKey) && visualRect != null)
+                {
+                    activeBenchVisualsByUnit[normalizedUnitKey] = visualRect;
+                }
 
                 var button = tile.GetComponent<Button>() ?? tile.gameObject.AddComponent<Button>();
                 button.transition = Selectable.Transition.None;
@@ -1269,60 +1762,1102 @@ namespace EmojiWar.Client.UI.Match
                 recapLines = new[] { "Five turns resolved. No extra recap was generated." };
             }
 
-            foreach (var line in recapLines)
+            for (var index = 0; index < recapLines.Count; index++)
             {
-                var entry = RescueStickerFactory.CreateCompactTimelineRow(recapListRoot, "CLASH", line);
-                entry.AddComponent<LayoutElement>().preferredHeight = 48f;
+                var entry = CreateResultRecapRow(recapListRoot, index, recapLines[index]);
+                entry.AddComponent<LayoutElement>().preferredHeight = 42f;
             }
         }
 
         private void RebuildResultTurns(IReadOnlyList<string> turnLines)
         {
             ClearChildren(resultTurnsRoot);
-            foreach (var line in turnLines ?? Array.Empty<string>())
+            var lines = turnLines ?? Array.Empty<string>();
+            for (var index = lines.Count - 1; index >= 0; index--)
             {
+                var line = lines[index];
                 var lead = ExtractTurnLead(line);
                 var body = StripTurnLead(line);
-                var entry = RescueStickerFactory.CreateCompactTimelineRow(resultTurnsRoot, lead, body);
-                entry.AddComponent<LayoutElement>().preferredHeight = 48f;
+                var entry = CreateResultTimelineRow(resultTurnsRoot, lead, body);
+                entry.AddComponent<LayoutElement>().preferredHeight = 38f;
             }
         }
 
         private void RefreshResultHeroDecor(EmojiClashResultViewModel model)
         {
-            ClearChildren(resultHeroDecorRoot);
-            if (resultHeroDecorRoot == null)
+            if (resultHeroFighterLayerRoot == null)
             {
                 return;
             }
 
+            ClearChildren(resultHeroFighterLayerRoot);
+            resultHeroFighterRects.Clear();
             var featured = ResolveFeaturedUnits(model);
+            RescueStickerFactory.CreateBlob(
+                resultHeroFighterLayerRoot,
+                "ResultStageFloor",
+                RescueStickerFactory.Palette.Mint,
+                new Vector2(0f, -92f),
+                new Vector2(760f, 132f),
+                0.10f);
+            RescueStickerFactory.CreateBlob(
+                resultHeroFighterLayerRoot,
+                "PlayerSpotlight",
+                RescueStickerFactory.Palette.Aqua,
+                new Vector2(-218f, -30f),
+                new Vector2(300f, 278f),
+                0.10f);
+            RescueStickerFactory.CreateBlob(
+                resultHeroFighterLayerRoot,
+                "RivalSpotlight",
+                RescueStickerFactory.Palette.HotPink,
+                new Vector2(218f, -30f),
+                new Vector2(300f, 278f),
+                0.10f);
+
             for (var index = 0; index < featured.Count; index++)
             {
                 var key = featured[index];
                 var name = EmojiClashRules.ToDisplayName(key);
+                var isPlayerSide = index == 0;
                 var fighter = RescueStickerFactory.CreateResultHeroFighter(
-                    resultHeroDecorRoot,
+                    resultHeroFighterLayerRoot,
                     key,
                     name,
                     UnitIconLibrary.GetPrimaryColor(key),
-                    EmojiWarVisualStyle.Layout.QuickResultHeroFighter);
+                    EmojiWarVisualStyle.Layout.QuickResultHeroFighter * 1.42f);
                 var rect = fighter.GetComponent<RectTransform>();
-                rect.anchorMin = index == 0 ? new Vector2(0.18f, 0.37f) : new Vector2(0.82f, 0.37f);
+                var winnerBias = ResolveWinnerBias(model, isPlayerSide);
+                rect.anchorMin = isPlayerSide
+                    ? new Vector2(0.185f, 0.335f + winnerBias)
+                    : new Vector2(0.815f, 0.335f + winnerBias);
                 rect.anchorMax = rect.anchorMin;
-                rect.localRotation = Quaternion.Euler(0f, 0f, index == 0 ? -8f : 8f);
-                NativeMotionKit.IdleBob(this, rect, 7f + index, 1.26f + index * 0.08f, true);
-                NativeMotionKit.BreatheScale(this, rect, 0.020f, 1.18f + index * 0.04f, true);
+                rect.localRotation = Quaternion.Euler(0f, 0f, isPlayerSide ? -6f : 6f);
+                fighter.AddComponent<CanvasGroup>();
+                resultHeroFighterRects.Add(rect);
             }
 
             if (resultOutcomeLabel != null)
             {
-                NativeMotionKit.StampSlam(this, resultOutcomeLabel.rectTransform, 1.14f, 0.20f);
+                resultOutcomeLabel.rectTransform.localScale = Vector3.one;
+            }
+
+            if (resultOutcomeArtRoot != null)
+            {
+                resultOutcomeArtRoot.localScale = Vector3.one;
+            }
+
+            ResetScale(resultHeroScoreCardRoot);
+        }
+
+        private GameObject CreateResultRecapRow(Transform parent, int index, string body)
+        {
+            var row = RescueStickerFactory.CreateGlassPanel(parent, "ResultRecapRow", EmojiWarVisualStyle.Layout.CompactTimelineRow, strong: false);
+            row.AddComponent<CanvasGroup>();
+            var image = row.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = index == 0
+                    ? WithAlpha(Color.Lerp(RescueStickerFactory.Palette.Aqua, RescueStickerFactory.Palette.InkPurple, 0.58f), 0.76f)
+                    : WithAlpha(Color.Lerp(RescueStickerFactory.Palette.ElectricPurple, RescueStickerFactory.Palette.InkPurple, 0.60f), 0.62f);
+            }
+
+            RescueStickerFactory.CreateBlob(
+                row.transform,
+                "RecapSpark",
+                index == 0 ? RescueStickerFactory.Palette.SunnyYellow : RescueStickerFactory.Palette.Mint,
+                new Vector2(-236f, 0f),
+                new Vector2(92f, 42f),
+                index == 0 ? 0.18f : 0.10f);
+
+            var chip = RescueStickerFactory.CreateStatusChip(
+                row.transform,
+                index == 0 ? "CLASH" : "NOTE",
+                index == 0 ? RescueStickerFactory.Palette.SunnyYellow : RescueStickerFactory.Palette.Aqua,
+                index == 0 ? RescueStickerFactory.Palette.InkPurple : RescueStickerFactory.Palette.SoftWhite);
+            SetAnchors(chip.transform as RectTransform, new Vector2(0.035f, 0.20f), new Vector2(0.18f, 0.80f));
+
+            var label = RescueStickerFactory.CreateLabel(
+                row.transform,
+                "RecapBody",
+                body,
+                17f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SoftWhite,
+                TextAlignmentOptions.Left,
+                new Vector2(0.22f, 0.12f),
+                new Vector2(0.96f, 0.88f));
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.enableAutoSizing = true;
+            label.fontSizeMax = 17f;
+            label.fontSizeMin = 12f;
+            return row;
+        }
+
+        private GameObject CreateResultTimelineRow(Transform parent, string lead, string body)
+        {
+            var row = RescueStickerFactory.CreateGlassPanel(parent, "ResultTimelineRow", EmojiWarVisualStyle.Layout.CompactTimelineRow, strong: false);
+            row.AddComponent<CanvasGroup>();
+            var image = row.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = WithAlpha(Color.Lerp(EmojiWarVisualStyle.Colors.PanelFillSoft, RescueStickerFactory.Palette.InkPurple, 0.14f), 0.64f);
+            }
+
+            var turnChip = RescueStickerFactory.CreateStatusChip(
+                row.transform,
+                string.IsNullOrWhiteSpace(lead) ? "T?" : lead,
+                EmojiWarVisualStyle.Colors.GoldLight,
+                RescueStickerFactory.Palette.InkPurple);
+            SetAnchors(turnChip.transform as RectTransform, new Vector2(0.035f, 0.16f), new Vector2(0.15f, 0.84f));
+
+            RescueStickerFactory.CreateBlob(
+                row.transform,
+                "TimelinePulse",
+                RescueStickerFactory.Palette.Aqua,
+                new Vector2(-180f, 0f),
+                new Vector2(120f, 30f),
+                0.08f);
+
+            var label = RescueStickerFactory.CreateLabel(
+                row.transform,
+                "TimelineBody",
+                body,
+                16f,
+                FontStyles.Bold,
+                RescueStickerFactory.Palette.SoftWhite,
+                TextAlignmentOptions.Left,
+                new Vector2(0.18f, 0.10f),
+                new Vector2(0.96f, 0.88f));
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.enableAutoSizing = true;
+            label.fontSizeMax = 16f;
+            label.fontSizeMin = 11f;
+            return row;
+        }
+
+        private void ApplyResultBannerTextTreatment(TMP_Text label)
+        {
+            if (label == null)
+            {
+                return;
+            }
+
+            label.enableAutoSizing = true;
+            label.fontSizeMax = 94f;
+            label.fontSizeMin = 54f;
+            label.characterSpacing = 2f;
+            var outline = label.gameObject.GetComponent<UnityEngine.UI.Outline>() ?? label.gameObject.AddComponent<UnityEngine.UI.Outline>();
+            outline.effectColor = WithAlpha(RescueStickerFactory.Palette.SoftWhite, 0.90f);
+            outline.effectDistance = new Vector2(3.2f, 3.2f);
+            var shadow = label.gameObject.GetComponent<Shadow>() ?? label.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = WithAlpha(RescueStickerFactory.Palette.InkPurple, 0.70f);
+            shadow.effectDistance = new Vector2(0f, -7f);
+        }
+
+        private void AnimateQueueView(string queueKey)
+        {
+            if (queueViewRoot == null || !gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            var normalizedKey = string.IsNullOrWhiteSpace(queueKey) ? "queue" : queueKey;
+            if (string.Equals(activeQueueMotionKey, normalizedKey, StringComparison.Ordinal) &&
+                queueDotsCoroutine != null)
+            {
+                return;
+            }
+
+            CancelQueueMotion();
+            activeQueueMotionKey = normalizedKey;
+            PrepareQueueEntranceState();
+            queueMotionVersion++;
+            queueEntranceCoroutine = StartCoroutine(PlayQueueEntrance(queueMotionVersion));
+        }
+
+        private void PrepareQueueEntranceState()
+        {
+            PrepareQueueMotionTarget(queueHeroPanelRoot, Vector2.zero, 0.96f);
+            PrepareQueueMotionTarget(queueLiveStripRoot, Vector2.zero, 0.92f);
+            PrepareQueueMotionTarget(queueTitleRoot, Vector2.zero, 0.78f);
+            PrepareQueueMotionTarget(queuePlayerStickerRoot, new Vector2(-34f, -4f), 0.74f);
+            PrepareQueueMotionTarget(queueRivalMysteryRoot, new Vector2(34f, -4f), 0.74f);
+            PrepareQueueMotionTarget(queueVsRoot, Vector2.zero, 0.70f);
+            PrepareQueueMotionTarget(queueMetaPanelRoot, new Vector2(0f, -22f), 1f);
+            PrepareQueueMotionTarget(queueHomeButtonRoot, new Vector2(0f, -16f), 0.94f);
+            if (queueSearchSweepRoot != null)
+            {
+                EnsureCanvasGroup(queueSearchSweepRoot).alpha = 0f;
+            }
+
+            if (queueLiveStripSweepRoot != null)
+            {
+                EnsureCanvasGroup(queueLiveStripSweepRoot).alpha = 0f;
+            }
+        }
+
+        private static void PrepareQueueMotionTarget(RectTransform target, Vector2 offset, float scale)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            target.localScale = Vector3.one;
+            var group = EnsureCanvasGroup(target);
+            if (group != null)
+            {
+                group.alpha = 0f;
+            }
+        }
+
+        private System.Collections.IEnumerator PlayQueueEntrance(int version)
+        {
+            if (queueHeroPanelRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, queueHeroPanelRoot, EnsureCanvasGroup(queueHeroPanelRoot), new Vector2(0f, -18f), 0.22f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.06f);
+            if (!IsQueueMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (queueLiveStripRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, queueLiveStripRoot, EnsureCanvasGroup(queueLiveStripRoot), new Vector2(0f, 8f), 0.16f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.05f);
+            if (!IsQueueMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (queueTitleRoot != null)
+            {
+                NativeMotionKit.StampSlam(this, queueTitleRoot, 1.08f, 0.22f);
+                var titleGroup = EnsureCanvasGroup(queueTitleRoot);
+                if (titleGroup != null)
+                {
+                    titleGroup.alpha = 1f;
+                }
+            }
+
+            yield return new WaitForSecondsRealtime(0.10f);
+            if (!IsQueueMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (queuePlayerStickerRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, queuePlayerStickerRoot, EnsureCanvasGroup(queuePlayerStickerRoot), new Vector2(-28f, 0f), 0.22f);
+                NativeMotionKit.PunchScale(this, queuePlayerStickerRoot, 0.055f, 0.16f);
+            }
+
+            if (queueRivalMysteryRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, queueRivalMysteryRoot, EnsureCanvasGroup(queueRivalMysteryRoot), new Vector2(28f, 0f), 0.22f);
+                NativeMotionKit.PunchScale(this, queueRivalMysteryRoot, 0.055f, 0.16f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.12f);
+            if (!IsQueueMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (queueVsRoot != null)
+            {
+                NativeMotionKit.PopIn(this, queueVsRoot, EnsureCanvasGroup(queueVsRoot), 0.16f, 0.70f);
+                NativeMotionKit.PunchScale(this, queueVsRoot, 0.08f, 0.16f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.10f);
+            if (!IsQueueMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            if (queueMetaPanelRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, queueMetaPanelRoot, EnsureCanvasGroup(queueMetaPanelRoot), new Vector2(0f, -18f), 0.18f);
+            }
+
+            if (queueHomeButtonRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, queueHomeButtonRoot, EnsureCanvasGroup(queueHomeButtonRoot), new Vector2(0f, -12f), 0.16f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.12f);
+            if (!IsQueueMotionCurrent(version))
+            {
+                yield break;
+            }
+
+            StartQueueIdleMotion();
+            StartFindingRivalDots(version);
+            StartQueueSearchingSweep(version);
+            queueEntranceCoroutine = null;
+        }
+
+        private void StartQueueIdleMotion()
+        {
+            if (queueHeroPanelRoot != null)
+            {
+                NativeMotionKit.BreatheScale(this, queueHeroPanelRoot, 0.006f, 1.80f, true);
+            }
+
+            if (queuePlayerStickerRoot != null)
+            {
+                NativeMotionKit.IdleBob(this, queuePlayerStickerRoot, 3.4f, 1.42f, true);
+                NativeMotionKit.BreatheScale(this, queuePlayerStickerRoot, 0.016f, 1.28f, true);
+            }
+
+            if (queueRivalMysteryRoot != null)
+            {
+                NativeMotionKit.IdleBob(this, queueRivalMysteryRoot, 3.0f, 1.56f, true);
+                NativeMotionKit.BreatheScale(this, queueRivalMysteryRoot, 0.024f, 1.06f, true);
+                var glow = FindImage(queueRivalMysteryRoot, "QueueMysteryGlow");
+                if (glow != null)
+                {
+                    NativeMotionKit.PulseGraphic(
+                        this,
+                        glow,
+                        WithAlpha(RescueStickerFactory.Palette.ElectricPurple, 0.14f),
+                        WithAlpha(RescueStickerFactory.Palette.ElectricPurple, 0.32f),
+                        0.82f);
+                }
+            }
+
+            if (queueVsRoot != null)
+            {
+                NativeMotionKit.BreatheScale(this, queueVsRoot, 0.024f, 0.86f, true);
+            }
+
+            if (queueLiveStripRoot != null)
+            {
+                NativeMotionKit.BreatheScale(this, queueLiveStripRoot, 0.006f, 1.35f, true);
+            }
+        }
+
+        private void StartFindingRivalDots(int version)
+        {
+            if (queueDotsCoroutine != null)
+            {
+                StopCoroutine(queueDotsCoroutine);
+            }
+
+            queueDotsCoroutine = StartCoroutine(FindingRivalDotsRoutine(version));
+        }
+
+        private System.Collections.IEnumerator FindingRivalDotsRoutine(int version)
+        {
+            var baseText = "Finding Rival";
+            var dotCount = 0;
+            while (IsQueueMotionCurrent(version) && queueTitleLabel != null)
+            {
+                queueTitleLabel.text = baseText + new string('.', dotCount);
+                dotCount = (dotCount + 1) % 4;
+                yield return new WaitForSecondsRealtime(0.42f);
+            }
+
+            if (queueTitleLabel != null)
+            {
+                queueTitleLabel.text = baseText;
+            }
+
+            queueDotsCoroutine = null;
+        }
+
+        private System.Collections.IEnumerator PlayQueueMatchFoundHandoffRoutine(int version, Action completeAction)
+        {
+            if (queueTitleLabel != null)
+            {
+                queueTitleLabel.text = "RIVAL FOUND!";
+            }
+
+            if (queueStatusLabel != null)
+            {
+                queueStatusLabel.text = "Entering the arena.";
+            }
+
+            if (queueLiveStripRoot != null)
+            {
+                var label = queueLiveStripRoot.Find("Label")?.GetComponent<TMP_Text>();
+                if (label != null)
+                {
+                    label.text = "MATCH FOUND  •  READY";
+                }
+            }
+
+            NativeMotionKit.PunchScale(this, queueVsRoot, 0.16f, 0.22f);
+            NativeMotionKit.PunchScale(this, queuePlayerStickerRoot, 0.10f, 0.22f);
+            NativeMotionKit.PunchScale(this, queueRivalMysteryRoot, 0.10f, 0.22f);
+            NativeMotionKit.PunchScale(this, queueTitleRoot, 0.08f, 0.20f);
+            if (queueLiveStripRoot != null)
+            {
+                NativeMotionKit.PunchScale(this, queueLiveStripRoot, 0.08f, 0.18f);
+            }
+
+            var glow = queueRivalMysteryRoot != null ? FindImage(queueRivalMysteryRoot, "QueueMysteryGlow") : null;
+            if (glow != null)
+            {
+                NativeMotionKit.PulseGraphic(
+                    this,
+                    glow,
+                    WithAlpha(RescueStickerFactory.Palette.Mint, 0.20f),
+                    WithAlpha(RescueStickerFactory.Palette.Mint, 0.44f),
+                    0.28f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.48f);
+            queueHandoffCoroutine = null;
+            if (queueViewRoot != null && queueViewRoot.gameObject.activeInHierarchy && gameObject.activeInHierarchy)
+            {
+                completeAction?.Invoke();
+            }
+        }
+
+        private void StartQueueSearchingSweep(int version)
+        {
+            if (queueSweepCoroutine != null)
+            {
+                StopCoroutine(queueSweepCoroutine);
+            }
+
+            queueSweepCoroutine = StartCoroutine(QueueSearchingSweepRoutine(version));
+        }
+
+        private System.Collections.IEnumerator QueueSearchingSweepRoutine(int version)
+        {
+            if (queueSearchSweepRoot == null || queueMetaPanelRoot == null)
+            {
+                yield break;
+            }
+
+            var group = EnsureCanvasGroup(queueSearchSweepRoot);
+            var stripGroup = queueLiveStripSweepRoot != null ? EnsureCanvasGroup(queueLiveStripSweepRoot) : null;
+            var rect = queueSearchSweepRoot;
+            while (IsQueueMotionCurrent(version) && rect != null && queueMetaPanelRoot != null)
+            {
+                var elapsed = 0f;
+                const float duration = 1.15f;
+                while (elapsed < duration && IsQueueMotionCurrent(version) && rect != null)
+                {
+                    elapsed += Time.unscaledDeltaTime;
+                    var t = Mathf.Clamp01(elapsed / duration);
+                    SetAnchors(rect, new Vector2(Mathf.Lerp(0.02f, 0.77f, t), 0.08f), new Vector2(Mathf.Lerp(0.22f, 0.97f, t), 0.92f));
+                    if (group != null)
+                    {
+                        group.alpha = Mathf.Sin(t * Mathf.PI) * 0.55f;
+                    }
+
+                    if (queueLiveStripSweepRoot != null)
+                    {
+                        SetAnchors(queueLiveStripSweepRoot, new Vector2(Mathf.Lerp(0.02f, 0.80f, t), 0.10f), new Vector2(Mathf.Lerp(0.18f, 0.96f, t), 0.90f));
+                    }
+
+                    if (stripGroup != null)
+                    {
+                        stripGroup.alpha = Mathf.Sin(t * Mathf.PI) * 0.42f;
+                    }
+
+                    yield return null;
+                }
+
+                if (group != null)
+                {
+                    group.alpha = 0f;
+                }
+
+                if (stripGroup != null)
+                {
+                    stripGroup.alpha = 0f;
+                }
+
+                yield return new WaitForSecondsRealtime(0.34f);
+            }
+
+            queueSweepCoroutine = null;
+        }
+
+        private bool IsQueueMotionCurrent(int version)
+        {
+            return queueViewRoot != null &&
+                   queueViewRoot.gameObject.activeInHierarchy &&
+                   gameObject.activeInHierarchy &&
+                   queueMotionVersion == version;
+        }
+
+        private void CancelQueueMotion()
+        {
+            queueMotionVersion++;
+            activeQueueMotionKey = string.Empty;
+            if (queueEntranceCoroutine != null)
+            {
+                StopCoroutine(queueEntranceCoroutine);
+                queueEntranceCoroutine = null;
+            }
+
+            if (queueDotsCoroutine != null)
+            {
+                StopCoroutine(queueDotsCoroutine);
+                queueDotsCoroutine = null;
+            }
+
+            if (queueSweepCoroutine != null)
+            {
+                StopCoroutine(queueSweepCoroutine);
+                queueSweepCoroutine = null;
+            }
+
+            if (queueHandoffCoroutine != null)
+            {
+                StopCoroutine(queueHandoffCoroutine);
+                queueHandoffCoroutine = null;
+            }
+        }
+
+        private static string BuildQueueMotionKey(string queueTicket)
+        {
+            return string.IsNullOrWhiteSpace(queueTicket)
+                ? "queue:pending"
+                : $"queue:{ShortQueueId(queueTicket)}";
+        }
+
+        private static string ResolveQueueStatusCopy(string note)
+        {
+            if (string.IsNullOrWhiteSpace(note))
+            {
+                return "Quick Clash queue joined. Waiting for a rival.";
+            }
+
+            var normalized = note.Trim();
+            if (normalized.IndexOf("queue accepted", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                normalized.IndexOf("still searching", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                normalized.IndexOf("finding another player", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "Quick Clash queue joined. Waiting for a rival.";
+            }
+
+            if (normalized.IndexOf("opponent found", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "Rival found. Entering the arena.";
+            }
+
+            return normalized
+                .Replace("Emoji Clash PvP", "Quick Clash", StringComparison.OrdinalIgnoreCase)
+                .Replace("PvP", "online", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ShortQueueId(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            var trimmed = value.Trim();
+            return trimmed.Length <= 8 ? trimmed : trimmed.Substring(0, 8);
+        }
+
+        private void ApplyResultStateMood(EmojiClashResultViewModel model)
+        {
+            if (resultOutcomeLabel == null)
+            {
+                return;
+            }
+
+            var accent = ResolveResultAccent(model?.OutcomeTitle);
+            resultOutcomeLabel.color = accent;
+            var outline = resultOutcomeLabel.GetComponent<UnityEngine.UI.Outline>();
+            if (outline != null)
+            {
+                outline.effectColor = model != null && model.IsDraw
+                    ? WithAlpha(RescueStickerFactory.Palette.Mint, 0.86f)
+                    : WithAlpha(RescueStickerFactory.Palette.SoftWhite, 0.92f);
+            }
+        }
+
+        private void ApplyResultOutcomeArt(string outcomeTitle)
+        {
+            if (resultOutcomeArtRoot == null || resultOutcomeArtImage == null || resultOutcomeLabel == null)
+            {
+                return;
+            }
+
+            var hasSprite = RescueStickerFactory.TryApplyResultArt(resultOutcomeArtImage, ResolveResultTitleSpriteName(outcomeTitle));
+            resultOutcomeArtImage.preserveAspect = true;
+            resultOutcomeArtRoot.gameObject.SetActive(hasSprite);
+            resultOutcomeLabel.gameObject.SetActive(!hasSprite);
+        }
+
+        private static string ResolveResultTitleSpriteName(string outcomeTitle)
+        {
+            if (!string.IsNullOrWhiteSpace(outcomeTitle))
+            {
+                if (outcomeTitle.IndexOf("VICTORY", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return "result_title_victory";
+                }
+
+                if (outcomeTitle.IndexOf("DEFEAT", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return "result_title_defeat";
+                }
+            }
+
+            return "result_title_draw";
+        }
+
+        private static float ResolveWinnerBias(EmojiClashResultViewModel model, bool isPlayerSide)
+        {
+            if (model == null || model.IsDraw || string.IsNullOrWhiteSpace(model.OutcomeTitle))
+            {
+                return 0f;
+            }
+
+            var playerWon = model.OutcomeTitle.Equals("VICTORY", StringComparison.OrdinalIgnoreCase);
+            var sideWon = playerWon == isPlayerSide;
+            return sideWon ? 0.028f : -0.016f;
+        }
+
+        private void AnimateResultSections(EmojiClashResultViewModel model)
+        {
+            var resultKey = BuildResultEntranceKey(model);
+            if (string.Equals(lastResultEntranceKey, resultKey, StringComparison.Ordinal))
+            {
+                EnsureResultEntranceVisibleState();
+                return;
+            }
+
+            lastResultEntranceKey = resultKey;
+            CancelResultEntrance(false);
+            PrepareResultEntranceState();
+            resultEntranceVersion++;
+            resultEntranceCoroutine = StartCoroutine(PlayResultEntrance(resultEntranceVersion, model));
+        }
+
+        private string BuildResultEntranceKey(EmojiClashResultViewModel model)
+        {
+            if (model == null)
+            {
+                return "result:null";
+            }
+
+            var recaps = model.RecapLines != null ? string.Join("|", model.RecapLines) : string.Empty;
+            var turns = model.TurnLines != null ? string.Join("|", model.TurnLines) : string.Empty;
+            return $"{model.OutcomeTitle}|{model.FinalScoreLine}|{model.PrimaryActionLabel}|{recaps}|{turns}";
+        }
+
+        private void CancelResultEntrance(bool resetKey)
+        {
+            resultEntranceVersion++;
+            if (resultEntranceCoroutine != null)
+            {
+                StopCoroutine(resultEntranceCoroutine);
+                resultEntranceCoroutine = null;
+            }
+
+            if (resetKey)
+            {
+                lastResultEntranceKey = string.Empty;
+            }
+        }
+
+        private void PrepareResultEntranceState()
+        {
+            PrepareEntranceTarget(GetOutcomeBannerTarget(), Vector2.zero, 0.76f);
+            PrepareEntranceTarget(resultHeroScoreCardRoot, Vector2.zero, 0.82f);
+            PrepareEntranceTarget(resultRecapSurfaceRoot, new Vector2(0f, -32f), 1f);
+            PrepareEntranceTarget(resultTimelineSurfaceRoot, new Vector2(0f, -34f), 1f);
+            PrepareEntranceTarget(resultPlayAgainButton != null ? resultPlayAgainButton.transform as RectTransform : null, new Vector2(0f, -24f), 0.88f);
+            PrepareEntranceTarget(resultHomeButton != null ? resultHomeButton.transform as RectTransform : null, new Vector2(0f, -14f), 1f);
+
+            for (var index = 0; index < resultHeroFighterRects.Count; index++)
+            {
+                var fighter = resultHeroFighterRects[index];
+                var offset = index == 0 ? new Vector2(-58f, -12f) : new Vector2(58f, -12f);
+                PrepareEntranceTarget(fighter, offset, 0.82f);
+            }
+
+            PrepareRowAlphas(recapListRoot);
+            PrepareRowAlphas(resultTurnsRoot);
+        }
+
+        private void PrepareEntranceTarget(RectTransform target, Vector2 offset, float scale)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            var group = EnsureCanvasGroup(target);
+            if (group != null)
+            {
+                group.alpha = 0f;
+            }
+
+            target.localScale = Vector3.one;
+        }
+
+        private void PrepareRowAlphas(RectTransform rowRoot)
+        {
+            if (rowRoot == null)
+            {
+                return;
+            }
+
+            for (var index = 0; index < rowRoot.childCount; index++)
+            {
+                var child = rowRoot.GetChild(index) as RectTransform;
+                if (child == null)
+                {
+                    continue;
+                }
+
+                var group = EnsureCanvasGroup(child);
+                if (group != null)
+                {
+                    group.alpha = 0f;
+                }
+            }
+        }
+
+        private System.Collections.IEnumerator PlayResultEntrance(int version, EmojiClashResultViewModel model)
+        {
+            yield return new WaitForSecondsRealtime(0.05f);
+            if (!IsResultEntranceCurrent(version))
+            {
+                yield break;
+            }
+
+            var outcome = GetOutcomeBannerTarget();
+            if (outcome != null)
+            {
+                var outcomeGroup = EnsureCanvasGroup(outcome);
+                if (outcomeGroup != null)
+                {
+                    outcomeGroup.alpha = 1f;
+                }
+
+                NativeMotionKit.StampSlam(this, outcome, 1.20f, 0.26f);
+                NativeMotionKit.PunchScale(this, resultHeroBackDecorRoot, 0.024f, 0.20f);
+            }
+
+            yield return new WaitForSecondsRealtime(0.13f);
+            if (!IsResultEntranceCurrent(version))
+            {
+                yield break;
+            }
+
+            for (var index = 0; index < resultHeroFighterRects.Count; index++)
+            {
+                var fighter = resultHeroFighterRects[index];
+                var offset = index == 0 ? new Vector2(-58f, -12f) : new Vector2(58f, -12f);
+                if (fighter != null)
+                {
+                    NativeMotionKit.SlideFadeIn(this, fighter, EnsureCanvasGroup(fighter), offset, 0.24f);
+                    NativeMotionKit.PunchScale(this, fighter, ResolveResultFighterPunch(model, index == 0), 0.22f);
+                }
+            }
+
+            yield return new WaitForSecondsRealtime(0.17f);
+            if (!IsResultEntranceCurrent(version))
+            {
+                yield break;
             }
 
             if (resultHeroScoreCardRoot != null)
             {
-                NativeMotionKit.PopIn(this, resultHeroScoreCardRoot, resultHeroScoreCardRoot.GetComponent<CanvasGroup>(), 0.20f, 0.90f);
+                NativeMotionKit.PopIn(this, resultHeroScoreCardRoot, EnsureCanvasGroup(resultHeroScoreCardRoot), 0.24f, 0.82f);
+                if (resultScoreLabel != null)
+                {
+                    NativeMotionKit.PunchScale(this, resultScoreLabel.rectTransform, 0.07f, 0.18f);
+                }
+            }
+
+            yield return new WaitForSecondsRealtime(0.16f);
+            if (!IsResultEntranceCurrent(version))
+            {
+                yield break;
+            }
+
+            if (resultRecapSurfaceRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, resultRecapSurfaceRoot, EnsureCanvasGroup(resultRecapSurfaceRoot), new Vector2(0f, -32f), 0.22f);
+            }
+
+            StaggerResultRows(recapListRoot, 0.025f);
+
+            yield return new WaitForSecondsRealtime(0.15f);
+            if (!IsResultEntranceCurrent(version))
+            {
+                yield break;
+            }
+
+            if (resultTimelineSurfaceRoot != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, resultTimelineSurfaceRoot, EnsureCanvasGroup(resultTimelineSurfaceRoot), new Vector2(0f, -34f), 0.22f);
+            }
+
+            StaggerResultRows(resultTurnsRoot, 0.020f);
+
+            yield return new WaitForSecondsRealtime(0.20f);
+            if (!IsResultEntranceCurrent(version))
+            {
+                yield break;
+            }
+
+            var playRect = resultPlayAgainButton != null ? resultPlayAgainButton.transform as RectTransform : null;
+            if (playRect != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, playRect, EnsureCanvasGroup(playRect), new Vector2(0f, -24f), 0.22f);
+                yield return new WaitForSecondsRealtime(0.12f);
+                if (IsResultEntranceCurrent(version))
+                {
+                    NativeMotionKit.PunchScale(this, playRect, 0.055f, 0.16f);
+                }
+            }
+
+            var homeRect = resultHomeButton != null ? resultHomeButton.transform as RectTransform : null;
+            if (homeRect != null)
+            {
+                NativeMotionKit.SlideFadeIn(this, homeRect, EnsureCanvasGroup(homeRect), new Vector2(0f, -14f), 0.18f);
+            }
+
+            StartResultHeroIdleMotion();
+            resultEntranceCoroutine = null;
+        }
+
+        private bool IsResultEntranceCurrent(int version)
+        {
+            return resultViewRoot != null &&
+                   resultViewRoot.gameObject.activeInHierarchy &&
+                   resultEntranceVersion == version &&
+                   gameObject.activeInHierarchy;
+        }
+
+        private RectTransform GetOutcomeBannerTarget()
+        {
+            return resultOutcomeArtRoot != null && resultOutcomeArtRoot.gameObject.activeInHierarchy
+                ? resultOutcomeArtRoot
+                : resultOutcomeLabel != null
+                    ? resultOutcomeLabel.rectTransform
+                    : null;
+        }
+
+        private void StaggerResultRows(RectTransform rowRoot, float delayStep)
+        {
+            if (rowRoot == null)
+            {
+                return;
+            }
+
+            for (var index = 0; index < rowRoot.childCount; index++)
+            {
+                var child = rowRoot.GetChild(index) as RectTransform;
+                if (child == null)
+                {
+                    continue;
+                }
+
+                StartCoroutine(FadeResultRowIn(child, index * delayStep));
+            }
+        }
+
+        private System.Collections.IEnumerator FadeResultRowIn(RectTransform row, float delay)
+        {
+            if (delay > 0f)
+            {
+                yield return new WaitForSecondsRealtime(delay);
+            }
+
+            if (row == null)
+            {
+                yield break;
+            }
+
+            NativeMotionKit.PopIn(this, row, EnsureCanvasGroup(row), 0.14f, 0.96f);
+        }
+
+        private float ResolveResultFighterPunch(EmojiClashResultViewModel model, bool playerSide)
+        {
+            if (model == null || model.IsDraw || string.IsNullOrWhiteSpace(model.OutcomeTitle))
+            {
+                return 0.08f;
+            }
+
+            var playerWon = model.OutcomeTitle.Equals("VICTORY", StringComparison.OrdinalIgnoreCase);
+            return playerWon == playerSide ? 0.105f : 0.055f;
+        }
+
+        private void StartResultHeroIdleMotion()
+        {
+            for (var index = 0; index < resultHeroFighterRects.Count; index++)
+            {
+                var rect = resultHeroFighterRects[index];
+                if (rect == null)
+                {
+                    continue;
+                }
+
+                NativeMotionKit.IdleBob(this, rect, 4.2f + index, 1.18f + index * 0.08f, true);
+                NativeMotionKit.BreatheScale(this, rect, 0.012f, 1.24f + index * 0.04f, true);
+            }
+        }
+
+        private void EnsureResultEntranceVisibleState()
+        {
+            SetEntranceTargetVisible(GetOutcomeBannerTarget());
+            SetEntranceTargetVisible(resultHeroScoreCardRoot);
+            SetEntranceTargetVisible(resultRecapSurfaceRoot);
+            SetEntranceTargetVisible(resultTimelineSurfaceRoot);
+            SetEntranceTargetVisible(resultPlayAgainButton != null ? resultPlayAgainButton.transform as RectTransform : null);
+            SetEntranceTargetVisible(resultHomeButton != null ? resultHomeButton.transform as RectTransform : null);
+            foreach (var fighter in resultHeroFighterRects)
+            {
+                SetEntranceTargetVisible(fighter);
+            }
+
+            SetRowsVisible(recapListRoot);
+            SetRowsVisible(resultTurnsRoot);
+            StartResultHeroIdleMotion();
+        }
+
+        private void SetEntranceTargetVisible(RectTransform target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            var group = EnsureCanvasGroup(target);
+            if (group != null)
+            {
+                group.alpha = 1f;
+            }
+
+            target.localScale = Vector3.one;
+        }
+
+        private void SetRowsVisible(RectTransform rowRoot)
+        {
+            if (rowRoot == null)
+            {
+                return;
+            }
+
+            for (var index = 0; index < rowRoot.childCount; index++)
+            {
+                SetEntranceTargetVisible(rowRoot.GetChild(index) as RectTransform);
+            }
+        }
+
+        private void ResetResultMotionState()
+        {
+            ResetScale(resultHeroBlockRoot);
+            ResetScale(resultHeroScoreCardRoot);
+            ResetScale(resultOutcomeArtRoot);
+            ResetScale(resultOutcomeLabel != null ? resultOutcomeLabel.rectTransform : null);
+            ResetScale(resultPlayAgainButton != null ? resultPlayAgainButton.transform as RectTransform : null);
+            ResetScale(resultHomeButton != null ? resultHomeButton.transform as RectTransform : null);
+        }
+
+        private static void ResetScale(RectTransform rect)
+        {
+            if (rect != null)
+            {
+                rect.localScale = Vector3.one;
+            }
+        }
+
+        private Button CreateResultPrimaryCta(Transform parent)
+        {
+            var buttonObject = RescueStickerFactory.CreateResultArtPanel(
+                parent,
+                "PlayAgainResultCta",
+                string.Empty,
+                new Vector2(410f, 82f),
+                EmojiWarVisualStyle.Colors.GoldLight);
+            var rect = buttonObject.GetComponent<RectTransform>();
+            var image = buttonObject.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = Color.Lerp(EmojiWarVisualStyle.Colors.GoldLight, RescueStickerFactory.Palette.SunnyYellow, 0.20f);
+                image.raycastTarget = true;
+            }
+
+            var button = rect.gameObject.AddComponent<Button>();
+            button.targetGraphic = image;
+            rect.gameObject.AddComponent<CanvasGroup>();
+
+            var label = RescueStickerFactory.CreateLabel(
+                rect,
+                "PlayAgainLabel",
+                "PLAY AGAIN",
+                38f,
+                FontStyles.Bold,
+                Color.Lerp(EmojiWarVisualStyle.Colors.GoldText, RescueStickerFactory.Palette.InkPurple, 0.15f),
+                TextAlignmentOptions.Center,
+                new Vector2(0.06f, 0.12f),
+                new Vector2(0.94f, 0.88f));
+            label.raycastTarget = false;
+            label.characterSpacing = 1.2f;
+            var outline = label.gameObject.AddComponent<UnityEngine.UI.Outline>();
+            outline.effectColor = WithAlpha(RescueStickerFactory.Palette.SoftWhite, 0.58f);
+            outline.effectDistance = new Vector2(1.4f, 1.4f);
+            var shadow = label.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = WithAlpha(new Color32(0x7B, 0x3A, 0x00, 0xFF), 0.52f);
+            shadow.effectDistance = new Vector2(0f, -3.2f);
+
+            return button;
+        }
+
+        private void AddResultSecondaryButtonFlair(Button button, Color accentColor)
+        {
+            if (button == null)
+            {
+                return;
+            }
+
+            button.gameObject.AddComponent<CanvasGroup>();
+            RemoveChild(button.transform, "Highlight");
+            RemoveChild(button.transform, "BottomTint");
+            RemoveChild(button.transform, "ActionAccent");
+            var label = button.GetComponentInChildren<TMP_Text>(true);
+            if (label != null)
+            {
+                label.fontSize = Mathf.Max(label.fontSize, 17f);
+                label.characterSpacing = 0.5f;
+            }
+
+            var image = button.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = WithAlpha(Color.Lerp(accentColor, EmojiWarVisualStyle.Colors.SecondaryActionDark, 0.42f), 0.96f);
+            }
+
+            var glow = RescueStickerFactory.CreateBlob(
+                button.transform,
+                "SecondaryButtonGlow",
+                accentColor,
+                new Vector2(0f, 0f),
+                new Vector2(145f, 54f),
+                0.14f);
+            glow.transform.SetAsFirstSibling();
+        }
+
+        private static void RemoveChild(Transform parent, string childName)
+        {
+            var child = parent != null ? parent.Find(childName) : null;
+            if (child != null)
+            {
+                Destroy(child.gameObject);
             }
         }
 
@@ -1424,7 +2959,7 @@ namespace EmojiWar.Client.UI.Match
                 var stamp = RescueStickerFactory.CreateStatusChip(
                     card.transform,
                     enemyTone ? "REVEALED" : "LOCKED IN",
-                    enemyTone ? RescueStickerFactory.Palette.Coral : RescueStickerFactory.Palette.Mint,
+                    enemyTone ? RescueStickerFactory.Palette.ElectricPurple : RescueStickerFactory.Palette.Mint,
                     enemyTone ? RescueStickerFactory.Palette.SoftWhite : RescueStickerFactory.Palette.InkPurple);
                 SetAnchors(stamp.GetComponent<RectTransform>(), new Vector2(0.54f, 0.85f), new Vector2(0.96f, 0.97f));
             }
@@ -1490,10 +3025,10 @@ namespace EmojiWar.Client.UI.Match
 
             var chip = RescueStickerFactory.CreateStatusChip(
                 mystery.transform,
-                locked ? "LOCKED" : "HIDDEN",
-                locked ? RescueStickerFactory.Palette.Coral : RescueStickerFactory.Palette.ElectricPurple,
-                RescueStickerFactory.Palette.SoftWhite);
-            SetAnchors(chip.GetComponent<RectTransform>(), new Vector2(0.28f, 0.84f), new Vector2(0.72f, 0.95f));
+                locked ? "RIVAL READY" : "HIDDEN",
+                locked ? RescueStickerFactory.Palette.Mint : RescueStickerFactory.Palette.ElectricPurple,
+                locked ? RescueStickerFactory.Palette.InkPurple : RescueStickerFactory.Palette.SoftWhite);
+            SetAnchors(chip.GetComponent<RectTransform>(), new Vector2(0.22f, 0.84f), new Vector2(0.78f, 0.95f));
             return mystery;
         }
 
@@ -1560,18 +3095,358 @@ namespace EmojiWar.Client.UI.Match
             if (activeRivalHidden && rightCard != null)
             {
                 var mysteryRoot = rightCard.Find("MysteryPulseRoot") as RectTransform ?? rightCard;
-                NativeMotionKit.BreatheScale(this, mysteryRoot, 0.015f, 1.24f, true);
-                NativeMotionKit.IdleBob(this, mysteryRoot, 2.6f, 1.42f, true);
+                NativeMotionKit.BreatheScale(this, mysteryRoot, model.IsLocked ? 0.022f : 0.016f, model.IsLocked ? 1.02f : 1.22f, true);
+                NativeMotionKit.IdleBob(this, mysteryRoot, model.IsLocked ? 3.2f : 2.4f, model.IsLocked ? 1.18f : 1.38f, true);
                 var mysteryGlow = FindImage(mysteryRoot, "MysteryGlow");
                 if (mysteryGlow != null)
                 {
                     NativeMotionKit.PulseGraphic(
                         this,
                         mysteryGlow,
-                        WithAlpha(RescueStickerFactory.Palette.ElectricPurple, 0.10f),
-                        WithAlpha(RescueStickerFactory.Palette.ElectricPurple, 0.18f),
-                        0.96f);
+                        WithAlpha(RescueStickerFactory.Palette.ElectricPurple, model.IsLocked ? 0.14f : 0.10f),
+                        WithAlpha(RescueStickerFactory.Palette.ElectricPurple, model.IsLocked ? 0.26f : 0.18f),
+                        model.IsLocked ? 0.78f : 0.96f);
                 }
+            }
+        }
+
+        private void TryPunchBenchSticker(RectTransform visualRoot)
+        {
+            var target = GetSafeStickerMotionTarget(visualRoot);
+            if (target != null)
+            {
+                NativeMotionKit.PunchScale(this, target, BenchTapPunchAmount, BenchTapPunchSeconds);
+            }
+        }
+
+        private RectTransform ResolveSelectedBenchVisual(RectTransform sourceCandidate, string unitKey)
+        {
+            var normalized = EmojiClashRules.NormalizeUnitKey(unitKey);
+            if (!string.IsNullOrWhiteSpace(normalized) &&
+                activeBenchVisualsByUnit.TryGetValue(normalized, out var selectedVisual) &&
+                selectedVisual != null)
+            {
+                // The submitted unit id is authoritative; the visual lookup only decides where the travel starts.
+                return selectedVisual;
+            }
+
+            return sourceCandidate;
+        }
+
+        private RectTransform GetSafeStickerMotionTarget(RectTransform root)
+        {
+            if (root == null)
+            {
+                return null;
+            }
+
+            var avatar = root.Find("EmojiAvatar") as RectTransform;
+            if (avatar != null)
+            {
+                return avatar;
+            }
+
+            var image = root.GetComponent<Image>();
+            if (image != null && image.color.a <= 0.01f)
+            {
+                return null;
+            }
+
+            return root;
+        }
+
+        private void PlayLockedInStampIfNeeded(EmojiClashTurnViewModel model, RectTransform playerCard)
+        {
+            if (model == null ||
+                playerCard == null ||
+                !model.IsLocked ||
+                model.IsResolved ||
+                string.IsNullOrWhiteSpace(model.PlayerPickKey))
+            {
+                return;
+            }
+
+            var key = BuildTurnVisualKey(model, "locked");
+            if (string.Equals(lastLockedStampMotionKey, key, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lastLockedStampMotionKey = key;
+            var stamp = FindStatusChipWithLabel(playerCard, "LOCKED IN");
+            if (stamp != null)
+            {
+                NativeMotionKit.StampSlam(this, stamp, 1.16f, LockedStampSlamSeconds);
+            }
+        }
+
+        private void TryPlayActiveTurnChipFeedback(EmojiClashTurnViewModel model, TMP_Text label)
+        {
+            if (model == null || label == null)
+            {
+                return;
+            }
+
+            var key = BuildTurnVisualKey(model, "turn-chip");
+            if (string.Equals(lastActiveTurnChipMotionKey, key, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lastActiveTurnChipMotionKey = key;
+            NativeMotionKit.PunchScale(this, label.rectTransform, 0.08f, 0.16f);
+        }
+
+        private void TryPlayFinalTurnFeedback(EmojiClashTurnViewModel model, TMP_Text label)
+        {
+            if (model == null ||
+                label == null ||
+                model.TurnNumber != model.TotalTurns ||
+                model.IsResolved)
+            {
+                return;
+            }
+
+            var key = $"final-turn:{model.TurnNumber}:{model.TotalTurns}:{model.TurnValue}";
+            if (string.Equals(lastFinalTurnMotionKey, key, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lastFinalTurnMotionKey = key;
+            NativeMotionKit.StampSlam(this, label.rectTransform, 1.18f, 0.20f);
+            if (turnValueLabel != null)
+            {
+                NativeMotionKit.StampSlam(this, turnValueLabel.rectTransform, 1.12f, 0.22f);
+            }
+        }
+
+        private string BuildTurnVisualKey(EmojiClashTurnViewModel model, string channel)
+        {
+            if (model == null)
+            {
+                return channel;
+            }
+
+            return $"{channel}:{model.TurnNumber}:{model.TotalTurns}:{model.TurnValue}:{model.PlayerPickKey}:{model.IsLocked}:{model.IsResolved}";
+        }
+
+        private void ResetQuickClashMotionReplayGuards()
+        {
+            lastLockedStampMotionKey = string.Empty;
+            lastActiveTurnChipMotionKey = string.Empty;
+            lastScoreRevealMotionKey = string.Empty;
+            lastFinalTurnMotionKey = string.Empty;
+        }
+
+        private void PlayRivalRevealPop(RectTransform rivalActor)
+        {
+            var target = GetSafeStickerMotionTarget(rivalActor);
+            if (target != null)
+            {
+                NativeMotionKit.PunchScale(this, target, 0.11f, 0.18f);
+            }
+        }
+
+        private System.Collections.IEnumerator PlayRivalRevealAnticipation(
+            RectTransform rightCard,
+            RectTransform rivalActor,
+            RectTransform clashCoreVisual,
+            float duration)
+        {
+            if (rivalActor == null)
+            {
+                yield break;
+            }
+
+            var canvasGroup = EnsureCanvasGroup(rivalActor);
+            var baseScale = rivalActor.localScale;
+            var baseRotation = rivalActor.localRotation;
+            var revealedChip = FindStatusChipWithLabel(rightCard, "REVEALED");
+            if (canvasGroup != null)
+            {
+                canvasGroup.alpha = 0f;
+            }
+
+            rivalActor.localScale = baseScale * 0.76f;
+            NativeMotionKit.PunchScale(this, rightCard, 0.045f, 0.12f);
+            if (clashCoreVisual != null)
+            {
+                NativeMotionKit.PunchScale(this, clashCoreVisual, 0.08f, 0.12f);
+            }
+
+            var safeDuration = Mathf.Max(0.10f, duration);
+            var elapsed = 0f;
+            while (elapsed < safeDuration && rivalActor != null)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                var t = Mathf.Clamp01(elapsed / safeDuration);
+                var eased = NativeMotionKit.EaseOutCubic(t);
+                if (canvasGroup != null)
+                {
+                    canvasGroup.alpha = Mathf.Lerp(0f, 1f, eased);
+                }
+
+                rivalActor.localScale = Vector3.LerpUnclamped(baseScale * 0.76f, baseScale * 1.06f, eased);
+                rivalActor.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(t * Mathf.PI * 2.0f) * 4.5f);
+                yield return null;
+            }
+
+            if (rivalActor != null)
+            {
+                if (canvasGroup != null)
+                {
+                    canvasGroup.alpha = 1f;
+                }
+
+                rivalActor.localScale = baseScale;
+                rivalActor.localRotation = baseRotation;
+                PlayRivalRevealPop(rivalActor);
+            }
+
+            if (revealedChip != null)
+            {
+                NativeMotionKit.StampSlam(this, revealedChip, 1.10f, 0.16f);
+            }
+        }
+
+        private void PlayClashImpactPunch(RectTransform leftActor, RectTransform rightActor, RectTransform clashCoreVisual)
+        {
+            var leftTarget = GetSafeStickerMotionTarget(leftActor);
+            var rightTarget = GetSafeStickerMotionTarget(rightActor);
+            if (leftTarget != null)
+            {
+                NativeMotionKit.PunchScale(this, leftTarget, 0.10f, 0.14f);
+            }
+
+            if (rightTarget != null)
+            {
+                NativeMotionKit.PunchScale(this, rightTarget, 0.10f, 0.14f);
+            }
+
+            if (clashCoreVisual != null)
+            {
+                NativeMotionKit.PunchScale(this, clashCoreVisual, 0.20f, 0.14f);
+            }
+        }
+
+        private bool TryPlayScoreFlyBadge(EmojiClashTurnViewModel model)
+        {
+            if (model == null || dragLayerRoot == null || scoreLabel == null || activeClashCoreRoot == null)
+            {
+                return false;
+            }
+
+            var outcome = model.OutcomeTitle ?? string.Empty;
+            var playerWon = outcome.StartsWith("YOU WIN", StringComparison.OrdinalIgnoreCase);
+            var rivalWon = outcome.StartsWith("RIVAL", StringComparison.OrdinalIgnoreCase);
+            if (!playerWon && !rivalWon)
+            {
+                return false;
+            }
+
+            var key = BuildTurnVisualKey(model, "score-reveal");
+            if (string.Equals(lastScoreRevealMotionKey, key, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            lastScoreRevealMotionKey = key;
+            var badge = RescueStickerFactory.CreateStatusChip(
+                dragLayerRoot,
+                $"+{model.TurnValue}",
+                playerWon ? RescueStickerFactory.Palette.Mint : RescueStickerFactory.Palette.Coral,
+                playerWon ? RescueStickerFactory.Palette.InkPurple : RescueStickerFactory.Palette.SoftWhite);
+            var badgeRect = badge.GetComponent<RectTransform>();
+            if (badgeRect == null)
+            {
+                Destroy(badge);
+                return false;
+            }
+
+            badgeRect.sizeDelta = new Vector2(92f, 38f);
+            badgeRect.anchorMin = new Vector2(0.5f, 0.5f);
+            badgeRect.anchorMax = new Vector2(0.5f, 0.5f);
+            badgeRect.pivot = new Vector2(0.5f, 0.5f);
+            DisableRaycasts(badge);
+
+            if (!TryGetLocalPointInDragLayer(activeClashCoreRoot, Vector2.zero, out var start) ||
+                !TryGetLocalPointInDragLayer(scoreLabel.rectTransform, new Vector2(playerWon ? -96f : 96f, 42f), out var end))
+            {
+                Destroy(badge);
+                return false;
+            }
+
+            badgeRect.anchoredPosition = start;
+            badgeRect.localScale = Vector3.one * 0.86f;
+            StartCoroutine(PlayScoreFlyBadgeRoutine(badge, badgeRect, start, end, playerWon));
+            return true;
+        }
+
+        private bool TryGetLocalPointInDragLayer(RectTransform source, Vector2 localOffset, out Vector2 localPoint)
+        {
+            localPoint = Vector2.zero;
+            if (source == null || dragLayerRoot == null)
+            {
+                return false;
+            }
+
+            return RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                dragLayerRoot,
+                RectTransformUtility.WorldToScreenPoint(null, source.TransformPoint(localOffset)),
+                null,
+                out localPoint);
+        }
+
+        private System.Collections.IEnumerator PlayScoreFlyBadgeRoutine(
+            GameObject badge,
+            RectTransform badgeRect,
+            Vector2 start,
+            Vector2 end,
+            bool playerWon)
+        {
+            if (badge == null || badgeRect == null)
+            {
+                yield break;
+            }
+
+            var canvasGroup = EnsureCanvasGroup(badgeRect);
+            var duration = 0.46f;
+            var elapsed = 0f;
+            var arc = playerWon ? new Vector2(-24f, 46f) : new Vector2(24f, 46f);
+            while (elapsed < duration && badgeRect != null)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                var t = Mathf.Clamp01(elapsed / duration);
+                var eased = NativeMotionKit.EaseOutCubic(t);
+                badgeRect.anchoredPosition = Vector2.LerpUnclamped(start, end, eased) + arc * Mathf.Sin(t * Mathf.PI);
+                badgeRect.localScale = Vector3.one * Mathf.Lerp(0.86f, 1.05f, Mathf.Sin(t * Mathf.PI));
+                if (canvasGroup != null)
+                {
+                    canvasGroup.alpha = Mathf.Lerp(1f, 0f, Mathf.Clamp01((t - 0.72f) / 0.28f));
+                }
+
+                yield return null;
+            }
+
+            if (badge != null)
+            {
+                Destroy(badge);
+            }
+
+            PlayScoreRevealPunch();
+        }
+
+        private void PlayScoreRevealPunch()
+        {
+            if (momentumTrackRoot != null)
+            {
+                NativeMotionKit.PunchScale(this, momentumTrackRoot, 0.035f, 0.16f);
+            }
+
+            if (scoreLabel != null)
+            {
+                NativeMotionKit.PunchScale(this, scoreLabel.rectTransform, ScoreRevealPunchAmount, ScoreRevealPunchSeconds);
             }
         }
 
@@ -1631,7 +3506,7 @@ namespace EmojiWar.Client.UI.Match
 
             if (sourceTile != null)
             {
-                NativeMotionKit.PunchScale(this, sourceTile, 0.06f, 0.12f);
+                NativeMotionKit.PunchScale(this, GetSafeStickerMotionTarget(sourceTile), 0.06f, 0.12f);
             }
         }
 
@@ -1655,12 +3530,15 @@ namespace EmojiWar.Client.UI.Match
             pendingSummonWasDrag = fromDrag;
             ClearPendingSummonVisual();
 
+            var selectedVisual = ResolveSelectedBenchVisual(sourceTile, item.UnitKey);
+            TryPunchBenchSticker(selectedVisual);
+
             if (!fromDrag)
             {
-                StartCoroutine(PlayImmediateSummonTravel(sourceTile, item, fromDrag));
+                StartCoroutine(PlayImmediateSummonTravel(selectedVisual, item, fromDrag));
             }
 
-            HandleSuccessfulDropFeedback(sourceTile);
+            HandleSuccessfulDropFeedback(selectedVisual ?? sourceTile);
             return true;
         }
 
@@ -1751,6 +3629,11 @@ namespace EmojiWar.Client.UI.Match
             SetImageColor(clashCoreVisual, "VsGlowRight", WithAlpha(RescueStickerFactory.Palette.Aqua, 0.20f));
             SetImageColor(clashCoreVisual, "VsCore", WithAlpha(RescueStickerFactory.Palette.SoftWhite, 0.34f));
 
+            if (rightActor != null)
+            {
+                yield return PlayRivalRevealAnticipation(rightCard, rightActor, clashCoreVisual, RivalRevealAnticipationSeconds);
+            }
+
             if (leftActor != null)
             {
                 StartCoroutine(PlayOverlayStandoff(leftActor, 1f, ResolvedClashStandoffSeconds));
@@ -1782,12 +3665,12 @@ namespace EmojiWar.Client.UI.Match
 
             if (leftActor != null)
             {
-                StartCoroutine(PlayOverlayCloudObscure(leftActor, ResolvedClashCloudBuildSeconds, 0.02f));
+                StartCoroutine(PlayOverlayCloudObscure(leftActor, ResolvedClashCloudBuildSeconds, 0.14f));
             }
 
             if (rightActor != null)
             {
-                StartCoroutine(PlayOverlayCloudObscure(rightActor, ResolvedClashCloudBuildSeconds, 0.02f));
+                StartCoroutine(PlayOverlayCloudObscure(rightActor, ResolvedClashCloudBuildSeconds, 0.14f));
             }
 
             EnsureClashCinematicLayer()?.SetAsLastSibling();
@@ -1795,6 +3678,7 @@ namespace EmojiWar.Client.UI.Match
 
             NativeMotionKit.PunchScale(this, clashCoreVisual, 0.18f, ResolvedClashImpactSeconds);
             NativeMotionKit.Shake(this, clashCoreVisual, 14f, ResolvedClashImpactSeconds);
+            PlayClashImpactPunch(leftActor, rightActor, clashCoreVisual);
             SetImageColor(clashCoreVisual, "VsBurstOuter", WithAlpha(RescueStickerFactory.Palette.SunnyYellow, 0.34f));
             SetImageColor(clashCoreVisual, "VsBurstMid", WithAlpha(RescueStickerFactory.Palette.Aqua, 0.32f));
             SetImageColor(clashCoreVisual, "VsCore", WithAlpha(RescueStickerFactory.Palette.SoftWhite, 0.66f));
@@ -1817,7 +3701,7 @@ namespace EmojiWar.Client.UI.Match
                     winnerActor.SetAsLastSibling();
                 }
 
-                StartCoroutine(FadeResolvedClashCloud(clashCloud.gameObject, clashCloudCanvasGroup, 0.24f));
+                StartCoroutine(FadeResolvedClashCloud(clashCloud.gameObject, clashCloudCanvasGroup, 0.16f));
             }
 
             if (winnerActor != null && loserActor != null)
@@ -1888,17 +3772,21 @@ namespace EmojiWar.Client.UI.Match
                 yield break;
             }
 
-            var sourceAnchor = sourceTile.Find("EmojiAvatar") as RectTransform ?? sourceTile;
+            var selectedSource = ResolveSelectedBenchVisual(sourceTile, item.UnitKey);
+            var sourceAnchor = selectedSource != null
+                ? GetSafeStickerMotionTarget(selectedSource) ?? selectedSource
+                : null;
             var startPosition = endPosition;
             if (!fromDrag)
             {
-                if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                if (sourceAnchor == null ||
+                    !RectTransformUtility.ScreenPointToLocalPointInRectangle(
                         dragLayerRoot,
                         RectTransformUtility.WorldToScreenPoint(null, sourceAnchor.TransformPoint(Vector3.zero)),
                         null,
                         out startPosition))
                 {
-                    yield break;
+                    startPosition = endPosition + new Vector2(-160f, -118f);
                 }
             }
 
@@ -1920,7 +3808,7 @@ namespace EmojiWar.Client.UI.Match
             travelRect.pivot = new Vector2(0.5f, 0.5f);
             travelRect.anchoredPosition = startPosition;
             travelRect.localScale = Vector3.one * (fromDrag ? 0.92f : 0.54f);
-            travelRect.localRotation = fromDrag ? Quaternion.identity : sourceTile.localRotation;
+            travelRect.localRotation = fromDrag || selectedSource == null ? Quaternion.identity : selectedSource.localRotation;
             travelRect.SetAsLastSibling();
             EnsureCanvasGroup(travelRect);
 
@@ -1969,7 +3857,13 @@ namespace EmojiWar.Client.UI.Match
 
             if (travelRect != null)
             {
-                NativeMotionKit.PunchScale(this, travelRect, 0.08f, 0.16f);
+                NativeMotionKit.PunchScale(this, GetSafeStickerMotionTarget(travelRect), 0.12f, 0.18f);
+            }
+
+            var landedFighter = GetCardFighterRect(activePlayerCardRoot);
+            if (landedFighter != null)
+            {
+                NativeMotionKit.PunchScale(this, landedFighter, 0.09f, 0.18f);
             }
         }
 
@@ -2069,6 +3963,26 @@ namespace EmojiWar.Client.UI.Match
             }
         }
 
+        private RectTransform FindStatusChipWithLabel(Transform root, string text)
+        {
+            if (root == null || string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            foreach (var label in root.GetComponentsInChildren<TMP_Text>(true))
+            {
+                if (label != null &&
+                    string.Equals(label.text, text, StringComparison.OrdinalIgnoreCase) &&
+                    label.transform.parent != null)
+                {
+                    return label.transform.parent as RectTransform;
+                }
+            }
+
+            return null;
+        }
+
         private static Color WithAlpha(Color color, float alpha)
         {
             color.a = Mathf.Clamp01(alpha);
@@ -2082,7 +3996,13 @@ namespace EmojiWar.Client.UI.Match
                 return null;
             }
 
-            return target.GetComponent<CanvasGroup>() ?? target.gameObject.AddComponent<CanvasGroup>();
+            var group = target.GetComponent<CanvasGroup>();
+            if (group == null)
+            {
+                group = target.gameObject.AddComponent<CanvasGroup>();
+            }
+
+            return group;
         }
 
         private RectTransform EnsureClashCinematicLayer()
@@ -2297,10 +4217,15 @@ namespace EmojiWar.Client.UI.Match
                 return clashVfxAlphaTintMaterial;
             }
 
+            if (clashVfxAlphaTintShaderUnavailable)
+            {
+                return null;
+            }
+
             var shader = Shader.Find("UI/EmojiWarAlphaTint");
             if (shader == null)
             {
-                Debug.LogError("Emoji Clash VFX shader missing: UI/EmojiWarAlphaTint");
+                clashVfxAlphaTintShaderUnavailable = true;
                 return null;
             }
 
@@ -2427,10 +4352,14 @@ namespace EmojiWar.Client.UI.Match
                 var lobeTravel = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t / lobeOnlyPhaseEnd));
                 var mergeBuild = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((elapsed - lobeOnlySeconds) / mergePhaseDuration));
                 var pulse = 0.5f + (Mathf.Sin(t * Mathf.PI * 3.6f) * 0.5f);
+                var settleFade = Mathf.Clamp01((t - 0.78f) / 0.22f);
 
                 cloudRoot.localScale = Vector3.one * Mathf.Lerp(0.52f, 1.08f, eased);
                 cloudRoot.anchoredPosition = basePosition + new Vector2(0f, Mathf.Sin(t * Mathf.PI * 1.8f) * 5f);
-                canvasGroup.alpha = Mathf.Lerp(0f, 0.98f, Mathf.Clamp01(eased * 1.16f));
+                canvasGroup.alpha = Mathf.Lerp(
+                    Mathf.Lerp(0f, 0.92f, Mathf.Clamp01(eased * 1.16f)),
+                    0.66f,
+                    settleFade);
 
                 if (leftUnderlay != null)
                 {
@@ -2469,13 +4398,13 @@ namespace EmojiWar.Client.UI.Match
                 if (mergedPlayer != null)
                 {
                     mergedPlayer.rectTransform.localScale = Vector3.one * Mathf.Lerp(0.24f, 1.06f, mergeBuild);
-                    mergedPlayer.color = WithAlpha(mergedPlayer.color, Mathf.Lerp(0.00f, 0.84f, mergeBuild));
+                    mergedPlayer.color = WithAlpha(mergedPlayer.color, Mathf.Lerp(0.00f, Mathf.Lerp(0.74f, 0.52f, settleFade), mergeBuild));
                 }
 
                 if (mergedRival != null)
                 {
                     mergedRival.rectTransform.localScale = Vector3.one * Mathf.Lerp(0.24f, 1.06f, mergeBuild);
-                    mergedRival.color = WithAlpha(mergedRival.color, Mathf.Lerp(0.00f, 0.84f, mergeBuild));
+                    mergedRival.color = WithAlpha(mergedRival.color, Mathf.Lerp(0.00f, Mathf.Lerp(0.74f, 0.52f, settleFade), mergeBuild));
                 }
 
                 if (smokeCap != null)
@@ -3526,12 +5455,51 @@ namespace EmojiWar.Client.UI.Match
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                return "Final Score\nYou 0 - 0 Rival";
+                return "You 0 - 0 Rival";
             }
 
             return value.StartsWith("Final Score:", StringComparison.OrdinalIgnoreCase)
-                ? $"Final Score\n{value.Substring("Final Score:".Length).Trim()}"
+                ? value.Substring("Final Score:".Length).Trim()
                 : value;
+        }
+
+        private static (string mainScore, string supportLine) ParseResultScore(string value)
+        {
+            var text = string.IsNullOrWhiteSpace(value)
+                ? "Final Score: You 0 - 0 Rival"
+                : value.Replace('\n', ' ').Replace('\r', ' ').Trim();
+
+            if (text.StartsWith("Final Score:", StringComparison.OrdinalIgnoreCase))
+            {
+                text = text.Substring("Final Score:".Length).Trim();
+            }
+
+            var youIndex = text.IndexOf("You", StringComparison.OrdinalIgnoreCase);
+            var rivalIndex = text.IndexOf("Rival", StringComparison.OrdinalIgnoreCase);
+            if (youIndex >= 0 && rivalIndex > youIndex)
+            {
+                var scoreStart = youIndex + "You".Length;
+                var score = text.Substring(scoreStart, rivalIndex - scoreStart).Trim();
+                return (string.IsNullOrWhiteSpace(score) ? "0 - 0" : score, "You vs Rival");
+            }
+
+            return (string.IsNullOrWhiteSpace(text) ? "0 - 0" : text, "Final Score");
+        }
+
+        private static string FormatResultScoreRichText(string score)
+        {
+            if (string.IsNullOrWhiteSpace(score))
+            {
+                return "<color=#34E8FF>0</color> <color=#FFFFFF>-</color> <color=#FF5F91>0</color>";
+            }
+
+            var parts = score.Split('-');
+            if (parts.Length == 2)
+            {
+                return $"<color=#34E8FF>{parts[0].Trim()}</color> <color=#FFFFFF>-</color> <color=#FF5F91>{parts[1].Trim()}</color>";
+            }
+
+            return score;
         }
 
         private static Color ResolveResultAccent(string outcomeTitle)

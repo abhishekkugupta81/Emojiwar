@@ -23,8 +23,8 @@ export type EmojiRole =
   | "guard_support"
   | "status_ramp";
 
-export type MatchMode = "pvp_ranked" | "bot_practice" | "bot_smart";
-export type MatchStatus = "queued" | "banning" | "formation" | "resolving" | "finished" | "cancelled";
+export type MatchMode = "pvp_ranked" | "bot_practice" | "bot_smart" | "emoji_clash_pvp";
+export type MatchStatus = "queued" | "banning" | "formation" | "pick" | "resolving" | "finished" | "cancelled";
 export type Winner = "player_a" | "player_b" | "draw";
 export type FormationSlot = "front_left" | "front_center" | "front_right" | "back_left" | "back_right";
 export type PreferredRow = "front" | "back" | "flex";
@@ -208,9 +208,13 @@ export interface StartBotMatchResponse {
   playerTeam: EmojiId[];
   botTeam: EmojiId[];
   benchEmojiId: EmojiId | null;
+  playerBannedEmojiId?: EmojiId | null;
+  opponentBannedEmojiId?: EmojiId | null;
+  playerFinalTeam?: EmojiId[];
+  opponentFinalTeam?: EmojiId[];
   rulesVersion: string;
   status: MatchStatus;
-  phase: "formation" | "finished";
+  phase: "ban" | "formation" | "finished";
   playerFormation?: Formation;
   botFormation?: Formation;
   battleState?: BattleState | null;

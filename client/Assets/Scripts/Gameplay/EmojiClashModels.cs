@@ -73,6 +73,8 @@ namespace EmojiWar.Client.Gameplay.Clash
         public int PlayerScore;
         public int OpponentScore;
         public int MatchSeed;
+        public string MatchId = string.Empty;
+        public bool StartedFromPlayAgain;
         public HashSet<string> PlayerUsedUnitKeys = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> OpponentUsedUnitKeys = new(StringComparer.OrdinalIgnoreCase);
         public string PendingPlayerPick = string.Empty;

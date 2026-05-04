@@ -32,10 +32,27 @@ namespace EmojiWar.Client.Gameplay.Contracts
     {
         public int rank;
         public string userId = string.Empty;
+        public string user_id = string.Empty;
         public string displayName = string.Empty;
+        public string display_handle = string.Empty;
+        public string ladder_mode = string.Empty;
         public int currentElo;
+        public int rating;
+        public int hidden_mmr;
+        public int hiddenMmr;
+        public int visible_points;
+        public int visiblePoints;
+        public int games_played;
         public int wins;
         public int losses;
+        public int draws;
+        public int timeout_forfeits;
+        public int matches_vs_humans;
+        public int matches_vs_bots;
+        public int bot_fill_wins;
+        public int bot_fill_losses;
+        public int bot_fill_points_earned;
+        public string updated_at = string.Empty;
         public bool isCurrentUser;
     }
 
@@ -48,6 +65,7 @@ namespace EmojiWar.Client.Gameplay.Contracts
     [Serializable]
     public sealed class GetLeaderboardResponseDto
     {
+        public string ladder_mode = string.Empty;
         public LeaderboardEntryDto[] entries = Array.Empty<LeaderboardEntryDto>();
         public LeaderboardEntryDto[] nearbyEntries = Array.Empty<LeaderboardEntryDto>();
         public LeaderboardEntryDto myEntry;

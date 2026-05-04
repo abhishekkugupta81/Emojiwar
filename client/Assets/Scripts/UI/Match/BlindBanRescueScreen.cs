@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using EmojiWar.Client.Content;
@@ -49,18 +50,15 @@ namespace EmojiWar.Client.UI.Match
         private TMP_Text enemyHintLabel;
         private TMP_Text playerReadyLabel;
         private TMP_Text vsInstructionLabel;
-        private TMP_Text lockButtonLabel;
         private TMP_Text resultsTitleLabel;
         private TMP_Text yourBanResultLabel;
         private TMP_Text opponentBanResultLabel;
 
-        private Button lockButton;
         private GameObject testingRevealChip;
         private GameObject vsChip;
         private GameObject banResultsRoot;
 
         private bool introPlayed;
-        private bool lockButtonPulseActive;
         private string enemyLayoutSignature = string.Empty;
         private string playerLayoutSignature = string.Empty;
 
@@ -69,6 +67,7 @@ namespace EmojiWar.Client.UI.Match
         private string selectedEnemyId = string.Empty;
         private string lockedEnemyId = string.Empty;
         private string opponentBanId = string.Empty;
+        private bool revealLockedEnemyIdentity;
         private Action<string> onTargetChanged;
         private Action<string> onBanLocked;
         private int remainingSeconds;
@@ -118,6 +117,7 @@ namespace EmojiWar.Client.UI.Match
             string selectedEnemy,
             string lockedEnemy,
             string opponentBan,
+            bool revealLockedEnemy,
             Action<string> targetChanged,
             Action<string> banLockedCallback,
             int secondsRemaining)
@@ -128,6 +128,7 @@ namespace EmojiWar.Client.UI.Match
             selectedEnemyId = NormalizeOptionalKey(selectedEnemy);
             lockedEnemyId = NormalizeOptionalKey(lockedEnemy);
             opponentBanId = NormalizeOptionalKey(opponentBan);
+            revealLockedEnemyIdentity = revealLockedEnemy;
             onTargetChanged = targetChanged;
             onBanLocked = banLockedCallback;
             remainingSeconds = Mathf.Max(0, secondsRemaining);
@@ -139,7 +140,6 @@ namespace EmojiWar.Client.UI.Match
             RefreshEnemyStates();
             RefreshVsState();
             RefreshPlayerState();
-            RefreshLockState();
             PlayIntroOnce();
         }
 
@@ -157,7 +157,6 @@ namespace EmojiWar.Client.UI.Match
             enemyLayoutSignature = string.Empty;
             playerLayoutSignature = string.Empty;
             introPlayed = false;
-            lockButtonPulseActive = false;
 
             if (root != null)
             {
@@ -177,14 +176,13 @@ namespace EmojiWar.Client.UI.Match
             enemyHintLabel = null;
             playerReadyLabel = null;
             vsInstructionLabel = null;
-            lockButtonLabel = null;
             resultsTitleLabel = null;
             yourBanResultLabel = null;
             opponentBanResultLabel = null;
-            lockButton = null;
             testingRevealChip = null;
             vsChip = null;
             banResultsRoot = null;
+            revealLockedEnemyIdentity = false;
             resolvedVisibilityMode = BlindBanVisibilityMode.ProductionHiddenOpponentCards;
         }
 
@@ -199,7 +197,7 @@ namespace EmojiWar.Client.UI.Match
         private BlindBanVisibilityMode ActiveVisibilityMode => resolvedVisibilityMode;
         private bool IsTestingRevealMode => ActiveVisibilityMode == BlindBanVisibilityMode.TestingRevealOpponentCards;
         private bool IsProductionHiddenMode => ActiveVisibilityMode == BlindBanVisibilityMode.ProductionHiddenOpponentCards;
-        private bool ShouldRevealLockedEnemyIdentity => IsProductionHiddenMode && HasBanResults;
+        private bool ShouldRevealLockedEnemyIdentity => IsProductionHiddenMode && IsLocked && revealLockedEnemyIdentity;
 
         private void BuildOnce()
         {
@@ -225,7 +223,6 @@ namespace EmojiWar.Client.UI.Match
             CreateEnemySquad();
             CreateVsMoment();
             CreatePlayerSquad();
-            CreateLockButton();
         }
 
         private void CreateHeader()
@@ -263,7 +260,7 @@ namespace EmojiWar.Client.UI.Match
             statusCopyLabel = RescueStickerFactory.CreateLabel(
                 header,
                 "StatusCopy",
-                "Pick 1 enemy sticker",
+                "Pick 1 mystery slot",
                 18f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
@@ -364,7 +361,7 @@ namespace EmojiWar.Client.UI.Match
             vsInstructionLabel = RescueStickerFactory.CreateLabel(
                 vsRoot,
                 "Instruction",
-                "Tap one enemy sticker to ban",
+                "Tap one mystery slot to ban",
                 18f,
                 FontStyles.Bold,
                 RescueStickerFactory.Palette.SoftWhite,
@@ -455,25 +452,6 @@ namespace EmojiWar.Client.UI.Match
             playerRowLayout.childForceExpandHeight = false;
         }
 
-        private void CreateLockButton()
-        {
-            lockButton = RescueStickerFactory.CreateToyButton(
-                contentRoot,
-                "Choose Enemy",
-                new Color(0.50f, 0.43f, 0.72f, 0.92f),
-                RescueStickerFactory.Palette.SoftWhite,
-                new Vector2(560f, 76f),
-                primary: false);
-            var rect = lockButton.transform as RectTransform;
-            SetAnchors(rect, new Vector2(0.08f, 0.075f), new Vector2(0.92f, 0.155f));
-            AddEnterTarget(rect);
-            lockButtonLabel = lockButton.GetComponentInChildren<TMP_Text>(true);
-            PolishButton(lockButton, 28f);
-
-            lockButton.onClick.RemoveAllListeners();
-            lockButton.onClick.AddListener(HandleLockPressed);
-        }
-
         private void EnsureEnemyCards()
         {
             if (enemyGridRoot == null)
@@ -550,6 +528,11 @@ namespace EmojiWar.Client.UI.Match
             var view = new EnemyCardView(unit, rect, body, group, outline, button, avatar);
             button.onClick.RemoveAllListeners();
             button.onClick.AddListener(() => HandleEnemyPressed(view));
+            if (ShouldRevealLockedEnemyIdentity && string.Equals(unit.Id, lockedEnemyId, StringComparison.Ordinal))
+            {
+                StartCoroutine(FlipRevealRoutine(rect, group));
+            }
+
             return view;
         }
 
@@ -737,9 +720,9 @@ namespace EmojiWar.Client.UI.Match
                 statusCopyLabel.text = HasBanResults
                     ? "Bans revealed"
                     : IsLocked
-                    ? IsProductionHiddenMode
-                        ? BuildLockedRevealCopy()
-                        : "Testing reveal: waiting for opponent..."
+                    ? ShouldRevealLockedEnemyIdentity
+                        ? "Ban accepted. Waiting for rival..."
+                        : "Submitting ban..."
                     : IsProductionHiddenMode
                         ? "Enemy squad hidden"
                         : "Testing reveal: opponent shown";
@@ -747,7 +730,7 @@ namespace EmojiWar.Client.UI.Match
 
             if (timerChipLabel != null)
             {
-                timerChipLabel.text = HasBanResults ? "REVEALED" : IsLocked ? "LOCKED" : $"{Mathf.Max(1, remainingSeconds)}s";
+                timerChipLabel.text = HasBanResults ? "REVEALED" : IsLocked ? "PICKED" : $"{Mathf.Max(1, remainingSeconds)}s";
             }
         }
 
@@ -762,7 +745,7 @@ namespace EmojiWar.Client.UI.Match
             {
                 enemyTitleLabel.text = IsProductionHiddenMode
                     ? "Hidden Enemy Squad"
-                    : "Enemy Squad · Test Reveal";
+                    : "Enemy Squad";
             }
 
             if (enemyHintLabel != null)
@@ -770,9 +753,9 @@ namespace EmojiWar.Client.UI.Match
                 enemyHintLabel.text = HasBanResults
                     ? BuildBanResultsHint()
                     : IsLocked
-                    ? IsProductionHiddenMode
-                        ? BuildLockedRevealHint()
-                        : "Testing reveal active"
+                    ? ShouldRevealLockedEnemyIdentity
+                        ? "Your ban is revealed"
+                        : "Submitting your pick"
                     : IsProductionHiddenMode
                         ? "Tap a mystery slot"
                         : "Tap a target";
@@ -789,6 +772,7 @@ namespace EmojiWar.Client.UI.Match
             var isSelected = !IsLocked && string.Equals(selectedEnemyId, view.Unit.Id, StringComparison.Ordinal);
             var isLockedTarget = string.Equals(lockedEnemyId, view.Unit.Id, StringComparison.Ordinal);
             var isDisabled = IsLocked && !isLockedTarget;
+            var isIdentityVisible = ShouldShowEnemyIdentity(view.Unit);
 
             if (view.CanvasGroup != null)
             {
@@ -797,11 +781,22 @@ namespace EmojiWar.Client.UI.Match
 
             if (view.Body != null)
             {
-                view.Body.color = isLockedTarget
-                    ? Color.Lerp(view.Unit.CardColor, RescueStickerFactory.Palette.Coral, 0.40f)
-                    : isSelected
-                        ? Color.Lerp(view.Unit.CardColor, view.Unit.AuraColor, 0.30f)
-                        : Color.Lerp(view.Unit.CardColor, RescueStickerFactory.Palette.InkPurple, 0.10f);
+                if (isIdentityVisible)
+                {
+                    view.Body.color = isLockedTarget
+                        ? Color.Lerp(view.Unit.CardColor, RescueStickerFactory.Palette.Coral, 0.40f)
+                        : isSelected
+                            ? Color.Lerp(view.Unit.CardColor, view.Unit.AuraColor, 0.30f)
+                            : Color.Lerp(view.Unit.CardColor, RescueStickerFactory.Palette.InkPurple, 0.10f);
+                }
+                else
+                {
+                    view.Body.color = isLockedTarget
+                        ? Color.Lerp(MysteryCardColor, RescueStickerFactory.Palette.SunnyYellow, 0.18f)
+                        : isSelected
+                            ? Color.Lerp(MysteryCardColor, MysteryAuraColor, 0.24f)
+                            : Color.Lerp(MysteryCardColor, RescueStickerFactory.Palette.InkPurple, 0.10f);
+                }
             }
 
             if (view.Outline != null)
@@ -826,7 +821,7 @@ namespace EmojiWar.Client.UI.Match
 
             SetSelectedBadge(view.Rect, isSelected);
             SetDisabledOverlay(view.Rect, isDisabled);
-            SetBanStamp(view, isLockedTarget);
+            SetBanStamp(view, isLockedTarget && isIdentityVisible);
         }
 
         private void RefreshVsState()
@@ -864,12 +859,12 @@ namespace EmojiWar.Client.UI.Match
             if (vsInstructionLabel != null)
             {
                 vsInstructionLabel.text = IsLocked
-                    ? IsProductionHiddenMode
-                        ? BuildLockedRevealInstruction()
-                        : "Ban locked. Both squads stay visible."
+                    ? ShouldRevealLockedEnemyIdentity
+                        ? "Your banned card is revealed. Waiting for rival..."
+                        : "Submitting your mystery slot..."
                     : IsProductionHiddenMode
-                        ? "Pick 1 mystery slot. Reveals after both bans lock."
-                        : "Tap one enemy sticker to ban";
+                        ? "Tap 1 mystery slot to ban. It reveals after submit."
+                        : "Tap one target to ban";
             }
         }
 
@@ -883,79 +878,6 @@ namespace EmojiWar.Client.UI.Match
             foreach (var mini in playerMiniViews)
             {
                 SetOpponentBanMark(mini.Rect, string.Equals(opponentBanId, mini.Unit.Id, StringComparison.Ordinal));
-            }
-        }
-
-        private void RefreshLockState()
-        {
-            if (lockButton == null)
-            {
-                return;
-            }
-
-            var selectedReady = !string.IsNullOrWhiteSpace(selectedEnemyId);
-            var actionable = selectedReady && !IsLocked;
-            var label = IsLocked ? "Ban Locked" : actionable ? "Lock Ban" : IsProductionHiddenMode ? "Choose Slot" : "Choose Enemy";
-            var bodyColor = IsLocked
-                ? RescueStickerFactory.Palette.Mint
-                : actionable
-                    ? RescueStickerFactory.Palette.HotPink
-                    : new Color(0.50f, 0.43f, 0.72f, 0.92f);
-            var textColor = IsLocked
-                ? RescueStickerFactory.Palette.InkPurple
-                : RescueStickerFactory.Palette.SoftWhite;
-
-            lockButton.interactable = actionable;
-
-            var body = lockButton.GetComponent<Image>();
-            if (body != null)
-            {
-                body.color = bodyColor;
-            }
-
-            if (lockButtonLabel != null)
-            {
-                lockButtonLabel.text = label;
-                lockButtonLabel.color = textColor;
-            }
-
-            var highlight = lockButton.transform.Find("Highlight");
-            if (highlight != null)
-            {
-                var image = highlight.GetComponent<Image>();
-                if (image != null)
-                {
-                    image.color = actionable
-                        ? new Color(1f, 1f, 1f, 0.18f)
-                        : new Color(1f, 1f, 1f, 0.10f);
-                }
-            }
-
-            var outline = lockButton.GetComponent<Outline>();
-            if (outline != null)
-            {
-                outline.effectColor = actionable
-                    ? RescueStickerFactory.Palette.SunnyYellow
-                    : RescueStickerFactory.Palette.SoftWhite;
-                var outlineSize = actionable ? 4f : 2.5f;
-                outline.effectDistance = new Vector2(outlineSize, outlineSize);
-            }
-
-            var rect = lockButton.transform as RectTransform;
-            if (actionable && !lockButtonPulseActive)
-            {
-                NativeMotionKit.BreatheScale(this, rect, 0.022f, 1.08f, true);
-                lockButtonPulseActive = true;
-            }
-            else if (!actionable && lockButtonPulseActive)
-            {
-                NativeMotionKit.BreatheScale(this, rect, 0f, 1.08f, false);
-                lockButtonPulseActive = false;
-            }
-
-            if (!actionable && rect != null)
-            {
-                rect.localScale = Vector3.one;
             }
         }
 
@@ -973,20 +895,45 @@ namespace EmojiWar.Client.UI.Match
             }
 
             RefreshEnemyStates();
-            RefreshLockState();
             onTargetChanged?.Invoke(view.Unit.Id);
+            onBanLocked?.Invoke(view.Unit.Id);
         }
 
-        private void HandleLockPressed()
+        private static IEnumerator FlipRevealRoutine(RectTransform rect, CanvasGroup group)
         {
-            if (IsLocked || string.IsNullOrWhiteSpace(selectedEnemyId))
+            if (rect == null)
             {
-                return;
+                yield break;
             }
 
-            var rect = lockButton.transform as RectTransform;
-            NativeMotionKit.PunchScale(this, rect, 0.08f, 0.15f);
-            onBanLocked?.Invoke(selectedEnemyId);
+            var start = rect.localScale;
+            if (group != null)
+            {
+                group.alpha = 0.15f;
+            }
+
+            const float duration = 0.20f;
+            var elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                var t = Mathf.Clamp01(elapsed / duration);
+                var eased = 1f - Mathf.Pow(1f - t, 3f);
+                var x = Mathf.Lerp(0.18f, 1f, eased);
+                rect.localScale = new Vector3(start.x * x, start.y * Mathf.Lerp(1.08f, 1f, eased), start.z);
+                if (group != null)
+                {
+                    group.alpha = Mathf.Lerp(0.15f, 1f, eased);
+                }
+
+                yield return null;
+            }
+
+            rect.localScale = start;
+            if (group != null)
+            {
+                group.alpha = 1f;
+            }
         }
 
         private bool ShouldShowEnemyIdentity(UnitView unit)

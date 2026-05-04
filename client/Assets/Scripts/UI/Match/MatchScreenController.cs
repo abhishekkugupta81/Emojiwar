@@ -82,6 +82,8 @@ namespace EmojiWar.Client.UI.Match
         private string currentMatchId = string.Empty;
         private QueueOrJoinMatchRequestDto currentPvpQueueRequest;
         private QueueOrJoinMatchResponseDto currentPvpMatch;
+        private QueueOrJoinClashRequestDto currentClashPvpRequest;
+        private QueueOrJoinClashResponseDto currentClashPvpMatch;
         private StartBotMatchResponseDto currentBotMatch;
         private string lastPvpRequestError = string.Empty;
         private string[] currentChoices = Array.Empty<string>();
@@ -91,6 +93,7 @@ namespace EmojiWar.Client.UI.Match
         private Coroutine uiRefreshRoutine;
         private Coroutine replayRoutine;
         private Coroutine initialRefreshRoutine;
+        private float pollingHeartbeatRealtime;
         private bool isLeavingMatch;
         private MatchUiPanelState currentPanelState = MatchUiPanelState.Queue;
         private ReplayMoment[] replayMoments = Array.Empty<ReplayMoment>();
@@ -115,10 +118,18 @@ namespace EmojiWar.Client.UI.Match
         private EmojiClashRescueScreen rescueEmojiClashScreen;
         private string rescueSelectedBanId = string.Empty;
         private string rescuePendingLockedBanId = string.Empty;
+        private bool rescueBanSubmitInFlight;
+        private bool rescueBotBanSubmitInFlight;
         private string[] rescueFormationAssignments = Array.Empty<string>();
         private Coroutine rescueBanRevealRoutine;
         private Coroutine emojiClashResolveRoutine;
+        private Coroutine emojiClashPvpResolveRoutine;
+        private Coroutine clashPvpQueueHandoffRoutine;
         private EmojiClashController emojiClashController;
+        private int lastClashPvpPresentedTurnCount;
+        private string clashPvpLocalPendingPick = string.Empty;
+        private string lastClashPvpRenderKey = string.Empty;
+        private string lastClashPvpQueueHandoffKey = string.Empty;
         private string rescueActiveBanRevealKey = string.Empty;
         private string rescueCompletedBanRevealKey = string.Empty;
         private bool v2FoundationReady = true;
@@ -902,6 +913,12 @@ namespace EmojiWar.Client.UI.Match
                 yield break;
             }
 
+            if (selectedMode == LaunchSelections.EmojiClashPvp)
+            {
+                yield return BeginEmojiClashPvp();
+                yield break;
+            }
+
             yield return BeginBotMatch(selectedMode);
         }
 
@@ -927,13 +944,74 @@ namespace EmojiWar.Client.UI.Match
             RenderEmojiClashTurn();
         }
 
+        private IEnumerator BeginEmojiClashPvp()
+        {
+            currentPanelState = MatchUiPanelState.Queue;
+            StopClashPvpQueueHandoff();
+            lastClashPvpQueueHandoffKey = string.Empty;
+            SetHeader(
+                "Quick Clash",
+                "Quick Play - Online Match",
+                "Quick Clash queue joined. Waiting for a rival.");
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            EnsureEmojiClashRescueScreen();
+            if (rescueEmojiClashScreen != null)
+            {
+                rescueEmojiClashScreen.gameObject.SetActive(true);
+                rescueEmojiClashScreen.transform.SetAsLastSibling();
+                rescueEmojiClashScreen.BindQueue(
+                    string.Empty,
+                    0,
+                    "Quick Clash queue joined. Waiting for a rival.",
+                    ReturnHome);
+            }
+
+            var bootstrap = AppBootstrap.Instance;
+            if (bootstrap == null)
+            {
+                ShowError("Emoji Clash PvP", "Queue unavailable.", "App bootstrap is not available.");
+                yield break;
+            }
+
+            if (!TryValidateFunctionsRuntime(bootstrap, out var runtimeError))
+            {
+                ShowError("Emoji Clash PvP", "Queue unavailable.", runtimeError);
+                yield break;
+            }
+
+            currentClashPvpRequest = new QueueOrJoinClashRequestDto
+            {
+                userId = bootstrap.SessionState.UserId,
+                matchId = LaunchSelections.ShouldResumeClashPvpMatch() ? LaunchSelections.GetClashPvpResumeMatchId() : string.Empty,
+                forceFreshEntry = false
+            };
+
+            QueueOrJoinClashResponseDto response = null;
+            yield return FetchClashPvpSnapshot(snapshot => response = snapshot, useCurrentMatchId: !string.IsNullOrWhiteSpace(currentClashPvpRequest.matchId), attempts: 3, timeoutSeconds: 20);
+            if (response == null)
+            {
+                ShowError("Emoji Clash PvP", "Queue request failed.", BuildQueueRequestFailureDetails());
+                yield break;
+            }
+
+            ApplyClashPvpSnapshot(response, markExistingResolvedAsPresented: true);
+            LaunchSelections.ClearClashPvpResumeRequested();
+            RenderCurrentClashPvpState();
+        }
+
         private IEnumerator BeginBotMatch(string mode)
         {
             currentPanelState = MatchUiPanelState.Queue;
             SetHeader(
                 "Battle Bot",
-                "Step 1 of 3 • Squad",
-                "Preparing selected 5 for battle.");
+                mode == LaunchSelections.BotPractice ? "Step 1 of 4 • Squad" : "Step 1 of 3 • Squad",
+                mode == LaunchSelections.BotPractice
+                    ? "Preparing selected 6 for blind ban practice."
+                    : "Preparing selected 5 for battle.");
             SetChoiceButtons(Array.Empty<string>(), null);
             SetActionButton(false, string.Empty, null);
 
@@ -950,7 +1028,7 @@ namespace EmojiWar.Client.UI.Match
                 yield break;
             }
 
-            if (!TryResolveEntryDeck(bootstrap, true, out var selectedDeck, out var deckId, out var deckError))
+            if (!TryResolveEntryDeck(bootstrap, mode, out var selectedDeck, out var deckId, out var deckError))
             {
                 ShowError("Battle Bot", "No squad selected.", deckError);
                 yield break;
@@ -996,6 +1074,12 @@ namespace EmojiWar.Client.UI.Match
             if (IsBotMatchFinished(currentBotMatch))
             {
                 RenderBotResult(currentBotMatch);
+                yield break;
+            }
+
+            if (IsPracticeBotMode() && IsBotBanPhase(currentBotMatch))
+            {
+                ShowBotBanPhase();
                 yield break;
             }
 
@@ -1048,7 +1132,7 @@ namespace EmojiWar.Client.UI.Match
             }
 
             if (!isResumeRequested &&
-                !TryResolveEntryDeck(bootstrap, false, out selectedDeck, out deckId, out deckError))
+                !TryResolveEntryDeck(bootstrap, LaunchSelections.PvpRanked, out selectedDeck, out deckId, out deckError))
             {
                 ShowError("Ranked PvP", "Queue unavailable.", deckError);
                 yield break;
@@ -1228,7 +1312,7 @@ namespace EmojiWar.Client.UI.Match
                 "Step 2 of 4 • Blind Ban",
                 BuildBanDetails(currentPvpMatch, locked: false));
 
-            SetChoiceButtons(currentPvpMatch.opponentDeck ?? Array.Empty<string>(), OnBanChoiceSelected);
+            SetChoiceButtons(BuildHiddenBanSlots(currentPvpMatch.opponentDeck), OnBanChoiceSelected);
             SetActionButton(true, "Return Home", ReturnHome);
         }
 
@@ -1254,6 +1338,89 @@ namespace EmojiWar.Client.UI.Match
                 BuildBanDetails(currentPvpMatch, locked: true));
             SetChoiceButtons(Array.Empty<string>(), null);
             SetActionButton(true, "Return Home", ReturnHome);
+        }
+
+        private void ShowBotBanPhase()
+        {
+            HideFormationRescue();
+            HideResultRescue();
+            if (currentBotMatch == null)
+            {
+                ShowError("Battle Practice", "Ban state unavailable.", "Practice match snapshot is missing.");
+                return;
+            }
+
+            currentPanelState = MatchUiPanelState.Ban;
+            if (UseRescueBlindBan && TryRenderBotBlindBanRescue(locked: false))
+            {
+                return;
+            }
+
+            SetHeader(
+                "Battle Practice",
+                "Step 2 of 4 • Blind Ban",
+                "Tap one mystery Practice Bot slot. Your banned card reveals after submit.");
+            SetChoiceButtons(BuildHiddenBanSlots(currentBotMatch.botDeck), OnBotBanChoiceSelected);
+            SetActionButton(true, "Return Home", ReturnHome);
+        }
+
+        private bool TryRenderBotBlindBanRescue(bool locked)
+        {
+            if (currentBotMatch == null || currentBotMatch.botDeck == null || currentBotMatch.botDeck.Length == 0)
+            {
+                return false;
+            }
+
+            var enemyUnits = currentBotMatch.botDeck
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(6)
+                .Select(value => BlindBanRescueScreen.UnitView.FromApiId(value, enemyTone: true))
+                .ToArray();
+            if (enemyUnits.Length == 0)
+            {
+                return false;
+            }
+
+            var playerUnits = (currentBotMatch.playerDeck ?? Array.Empty<string>())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(6)
+                .Select(value => BlindBanRescueScreen.UnitView.FromApiId(value, enemyTone: false))
+                .ToArray();
+
+            var serverLockedBan = NormalizeOptionalUnitKey(currentBotMatch.opponentBannedEmojiId);
+            var lockedBan = !string.IsNullOrWhiteSpace(serverLockedBan)
+                ? serverLockedBan
+                : locked
+                    ? NormalizeOptionalUnitKey(rescuePendingLockedBanId)
+                    : string.Empty;
+            var revealLockedBan = !string.IsNullOrWhiteSpace(serverLockedBan);
+            var selectedBan = !string.IsNullOrWhiteSpace(lockedBan)
+                ? lockedBan
+                : NormalizeOptionalUnitKey(rescueSelectedBanId);
+
+            EnsureBlindBanRescueScreen();
+            if (rescueBlindBanScreen == null)
+            {
+                return false;
+            }
+
+            rescueBlindBanScreen.gameObject.SetActive(true);
+            rescueBlindBanScreen.transform.SetAsLastSibling();
+            rescueBlindBanScreen.Bind(
+                enemyUnits,
+                playerUnits,
+                BlindBanRescueScreen.BlindBanVisibilityMode.ProductionHiddenOpponentCards,
+                selectedBan,
+                lockedBan,
+                currentBotMatch.playerBannedEmojiId,
+                revealLockedBan,
+                OnRescueBotBanTargetChanged,
+                OnRescueBotBanLocked,
+                0);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            return true;
         }
 
         private bool TryRenderBlindBanRescue(bool locked)
@@ -1288,6 +1455,7 @@ namespace EmojiWar.Client.UI.Match
                 : locked
                     ? NormalizeOptionalUnitKey(rescuePendingLockedBanId)
                     : string.Empty;
+            var revealLockedBan = !string.IsNullOrWhiteSpace(serverLockedBan);
             var selectedBan = !string.IsNullOrWhiteSpace(lockedBan)
                 ? lockedBan
                 : NormalizeOptionalUnitKey(rescueSelectedBanId);
@@ -1307,6 +1475,7 @@ namespace EmojiWar.Client.UI.Match
                 selectedBan,
                 lockedBan,
                 currentPvpMatch.playerBannedEmojiId,
+                revealLockedBan,
                 OnRescueBanTargetChanged,
                 OnRescueBanLocked,
                 ResolveBanSecondsRemaining());
@@ -1342,6 +1511,8 @@ namespace EmojiWar.Client.UI.Match
         private void HideBlindBanRescue()
         {
             StopBanRevealRoutine();
+            rescueBanSubmitInFlight = false;
+            rescueBotBanSubmitInFlight = false;
 
             if (rescueBlindBanScreen == null)
             {
@@ -1361,6 +1532,11 @@ namespace EmojiWar.Client.UI.Match
 
         private void OnRescueBanLocked(string targetId)
         {
+            if (rescueBanSubmitInFlight)
+            {
+                return;
+            }
+
             var normalized = NormalizeOptionalUnitKey(targetId);
             if (string.IsNullOrWhiteSpace(normalized))
             {
@@ -1369,9 +1545,48 @@ namespace EmojiWar.Client.UI.Match
 
             rescueSelectedBanId = normalized;
             rescuePendingLockedBanId = normalized;
+            rescueBanSubmitInFlight = true;
             HapticFeedback.TriggerLightImpact();
             TryRenderBlindBanRescue(locked: true);
             StartCoroutine(SubmitBanChoice(normalized));
+        }
+
+        private void OnRescueBotBanTargetChanged(string targetId)
+        {
+            rescueSelectedBanId = NormalizeOptionalUnitKey(targetId);
+            rescuePendingLockedBanId = string.Empty;
+            TryRenderBotBlindBanRescue(locked: false);
+        }
+
+        private void OnRescueBotBanLocked(string targetId)
+        {
+            if (rescueBotBanSubmitInFlight)
+            {
+                return;
+            }
+
+            var normalized = NormalizeOptionalUnitKey(targetId);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return;
+            }
+
+            rescueSelectedBanId = normalized;
+            rescuePendingLockedBanId = normalized;
+            rescueBotBanSubmitInFlight = true;
+            HapticFeedback.TriggerLightImpact();
+            TryRenderBotBlindBanRescue(locked: true);
+            StartCoroutine(SubmitBotBanChoice(normalized));
+        }
+
+        private void OnBotBanChoiceSelected(int index)
+        {
+            if (currentBotMatch == null || currentBotMatch.botDeck == null || index < 0 || index >= currentBotMatch.botDeck.Length)
+            {
+                return;
+            }
+
+            OnRescueBotBanLocked(currentBotMatch.botDeck[index]);
         }
 
         private int ResolveBanSecondsRemaining()
@@ -1442,6 +1657,45 @@ namespace EmojiWar.Client.UI.Match
             {
                 SafeRenderCurrentPvpState("post ban reveal interstitial");
             }
+        }
+
+        private void ShowBotBanRevealBeforeFormation()
+        {
+            if (currentBotMatch == null)
+            {
+                return;
+            }
+
+            currentPanelState = MatchUiPanelState.Waiting;
+            if (!TryRenderBotBlindBanRescue(locked: true))
+            {
+                ShowBotFormationPhase();
+                return;
+            }
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+
+            var revealKey = BuildBotBanRevealKey(currentBotMatch);
+            if (string.Equals(revealKey, rescueActiveBanRevealKey, StringComparison.Ordinal) &&
+                rescueBanRevealRoutine != null)
+            {
+                return;
+            }
+
+            StopBanRevealRoutine();
+            rescueActiveBanRevealKey = revealKey;
+            rescueBanRevealRoutine = StartCoroutine(AdvanceToBotFormationAfterBanReveal(revealKey));
+        }
+
+        private IEnumerator AdvanceToBotFormationAfterBanReveal(string revealKey)
+        {
+            yield return new WaitForSeconds(BlindBanRevealInterstitialSeconds);
+
+            rescueCompletedBanRevealKey = revealKey;
+            rescueActiveBanRevealKey = string.Empty;
+            rescueBanRevealRoutine = null;
+            ShowBotFormationPhase();
         }
 
         private void StopBanRevealRoutine()
@@ -1528,7 +1782,7 @@ namespace EmojiWar.Client.UI.Match
 
             currentPanelState = MatchUiPanelState.Formation;
             activeFormationContext = FormationContext.Bot;
-            var team = currentBotMatch.playerTeam ?? Array.Empty<string>();
+            var team = ResolveBotPlayerFinalTeam(currentBotMatch);
             EnsureFormationDraft($"bot:{currentMatchId}:{string.Join(",", team)}", team);
             if (UseRescueFormation && TryRenderBotFormationRescue(locked: false))
             {
@@ -1536,8 +1790,8 @@ namespace EmojiWar.Client.UI.Match
             }
 
             ShowFormationBuilder(
-                "Battle Bot",
-                "Step 2 of 3 • Formation",
+                IsPracticeBotMode() ? "Battle Practice" : "Battle Bot",
+                IsPracticeBotMode() ? "Step 3 of 4 • Formation" : "Step 2 of 3 • Formation",
                 BuildBotFormationDetailsPrefix(currentBotMatch),
                 SubmitBotFormation,
                 ReturnHome);
@@ -1598,31 +1852,36 @@ namespace EmojiWar.Client.UI.Match
             SetActionButton(true, "Return Home", ReturnHome);
         }
 
-        private void RenderBotResult(StartBotMatchResponseDto response)
+        private void RenderBotResult(StartBotMatchResponseDto response, bool skipPresentation = false)
         {
             HideBlindBanRescue();
             HideFormationRescue();
-            HideBattlePresentationRescue();
             currentPanelState = MatchUiPanelState.Result;
             StopReplay();
             replayMoments = BuildReplayMoments(response.battleState?.eventLog, response.whyChain);
             RefreshDecisiveMomentStrip(response.whyChain);
 
+            if (IsPracticeBotMode() && !skipPresentation && TryRenderBotBattlePresentation(response))
+            {
+                return;
+            }
+
+            HideBattlePresentationRescue();
             if (UseRescueResult && TryRenderBotResultRescue(response))
             {
                 return;
             }
 
             SetHeader(
-                "Battle Bot",
-                "Step 3 of 3 • Result",
+                IsPracticeBotMode() ? "Battle Practice" : "Battle Bot",
+                IsPracticeBotMode() ? "Step 4 of 4 • Result" : "Step 3 of 3 • Result",
                 BuildResultSummary(
                     BuildOutcomeLabel(response.winner, true, true),
                     response.whySummary,
                     response.whyChain,
-                    BuildEmojiSummary(response.playerTeam),
-                    BuildEmojiSummary(response.botTeam),
-                    "Bot"));
+                    BuildEmojiSummary(ResolveBotPlayerFinalTeam(response)),
+                    BuildEmojiSummary(ResolveBotOpponentFinalTeam(response)),
+                    IsPracticeBotMode() ? "Practice Bot" : "Bot"));
             SetChoiceButtons(BuildResultActions(true), OnResultActionSelected);
             SetActionButton(true, "Replay Highlights", ReplayHighlights);
         }
@@ -1665,16 +1924,18 @@ namespace EmojiWar.Client.UI.Match
 
         private IEnumerator SubmitBanChoice(string bannedEmojiId)
         {
+            rescueBanSubmitInFlight = true;
             SetHeader(
                 "Ranked PvP",
-                "Step 2 of 4 • Ban locked",
-                $"Locking ban on {HumanizeEmojiId(bannedEmojiId)}...\nSubmitting your blind ban to the server.");
+                "Step 2 of 4 • Ban picked",
+                "Submitting your mystery slot to the server.");
             SetChoiceButtons(Array.Empty<string>(), null);
             SetActionButton(false, string.Empty, null);
 
             var bootstrap = AppBootstrap.Instance;
             if (bootstrap == null)
             {
+                rescueBanSubmitInFlight = false;
                 ShowError("Ranked PvP", "Ban failed.", "Bootstrap unavailable.");
                 yield break;
             }
@@ -1690,6 +1951,7 @@ namespace EmojiWar.Client.UI.Match
             request.timeout = 10;
             if (!TryBeginWebRequest(request, out var operation, out var startError))
             {
+                rescueBanSubmitInFlight = false;
                 yield return RecoverPvpSnapshotOrShowError("Ranked PvP", "Ban failed.", startError);
                 yield break;
             }
@@ -1698,6 +1960,7 @@ namespace EmojiWar.Client.UI.Match
 
             if (request.result != UnityWebRequest.Result.Success)
             {
+                rescueBanSubmitInFlight = false;
                 yield return RecoverPvpSnapshotOrShowError("Ranked PvP", "Ban failed.", request.error);
                 yield break;
             }
@@ -1708,6 +1971,7 @@ namespace EmojiWar.Client.UI.Match
             if (snapshot != null)
             {
                 ApplyPvpSnapshot(snapshot);
+                rescueBanSubmitInFlight = false;
                 if (!string.IsNullOrWhiteSpace(snapshot.opponentBannedEmojiId))
                 {
                     HapticFeedback.TriggerLightImpact();
@@ -1718,8 +1982,74 @@ namespace EmojiWar.Client.UI.Match
             }
 
             HapticFeedback.TriggerLightImpact();
+            rescueBanSubmitInFlight = false;
             ShowWaitingForOpponentBan();
             EnsurePolling();
+        }
+
+        private IEnumerator SubmitBotBanChoice(string bannedEmojiId)
+        {
+            rescueBotBanSubmitInFlight = true;
+            SetHeader(
+                "Battle Practice",
+                "Step 2 of 4 • Ban picked",
+                "Submitting your mystery slot and revealing the Practice Bot ban.");
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+
+            var bootstrap = AppBootstrap.Instance;
+            if (bootstrap == null)
+            {
+                rescueBotBanSubmitInFlight = false;
+                ShowError("Battle Practice", "Ban failed.", "Bootstrap unavailable.");
+                yield break;
+            }
+
+            var payload = new SubmitBanRequestDto
+            {
+                matchId = currentMatchId,
+                playerId = bootstrap.SessionState.UserId,
+                bannedEmojiId = bannedEmojiId,
+            };
+
+            using var request = bootstrap.FunctionClient.BuildJsonRequest("submit_ban", JsonUtility.ToJson(payload), bootstrap.SessionState.AccessToken);
+            request.timeout = 10;
+            if (!TryBeginWebRequest(request, out var operation, out var startError))
+            {
+                rescueBotBanSubmitInFlight = false;
+                ShowError("Battle Practice", "Ban failed.", startError);
+                yield break;
+            }
+
+            yield return operation;
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                rescueBotBanSubmitInFlight = false;
+                ShowError("Battle Practice", "Ban failed.", BuildRequestErrorDetails(request));
+                yield break;
+            }
+
+            if (!TryParseJsonResponse(request, out SubmitBanResponseDto response, out var parseError))
+            {
+                rescueBotBanSubmitInFlight = false;
+                ShowError("Battle Practice", "Ban failed.", parseError);
+                yield break;
+            }
+
+            currentBotMatch.status = response.status;
+            currentBotMatch.phase = response.phase;
+            currentBotMatch.opponentBannedEmojiId = response.opponentBannedEmojiId;
+            currentBotMatch.playerBannedEmojiId = response.playerBannedEmojiId;
+            currentBotMatch.playerFinalTeam = response.playerFinalTeam ?? Array.Empty<string>();
+            currentBotMatch.opponentFinalTeam = response.opponentFinalTeam ?? Array.Empty<string>();
+            currentBotMatch.playerTeam = currentBotMatch.playerFinalTeam.Length > 0 ? currentBotMatch.playerFinalTeam : currentBotMatch.playerTeam;
+            currentBotMatch.botTeam = currentBotMatch.opponentFinalTeam.Length > 0 ? currentBotMatch.opponentFinalTeam : currentBotMatch.botTeam;
+            currentBotMatch.botFormation = response.opponentFormation ?? currentBotMatch.botFormation;
+
+            HapticFeedback.TriggerLightImpact();
+            rescueBotBanSubmitInFlight = false;
+            ShowBotBanRevealBeforeFormation();
         }
 
         private IEnumerator SubmitBotFormationRoutine()
@@ -1751,9 +2081,11 @@ namespace EmojiWar.Client.UI.Match
             };
 
             SetHeader(
-                "Battle Bot",
-                "Step 2 of 3 • Formation locked",
-                "Submitting your final 5-slot layout.");
+                IsPracticeBotMode() ? "Battle Practice" : "Battle Bot",
+                IsPracticeBotMode() ? "Step 3 of 4 • Formation locked" : "Step 2 of 3 • Formation locked",
+                IsPracticeBotMode()
+                    ? "Submitting your final 5-slot practice layout."
+                    : "Submitting your final 5-slot layout.");
             SetChoiceButtons(Array.Empty<string>(), null);
             SetActionButton(false, string.Empty, null);
 
@@ -1791,6 +2123,8 @@ namespace EmojiWar.Client.UI.Match
             currentBotMatch.botFormation = response.opponentFormation;
             currentBotMatch.playerTeam = response.playerFinalTeam ?? currentBotMatch.playerTeam;
             currentBotMatch.botTeam = response.opponentFinalTeam ?? currentBotMatch.botTeam;
+            currentBotMatch.playerFinalTeam = response.playerFinalTeam ?? currentBotMatch.playerFinalTeam;
+            currentBotMatch.opponentFinalTeam = response.opponentFinalTeam ?? currentBotMatch.opponentFinalTeam;
             currentBotMatch.battleState = response.battleState;
             currentBotMatch.winner = response.winner;
             currentBotMatch.whySummary = response.whySummary;
@@ -1885,13 +2219,20 @@ namespace EmojiWar.Client.UI.Match
 
         private void OnBanChoiceSelected(int index)
         {
-            if (index < 0 || index >= currentChoices.Length)
+            if (rescueBanSubmitInFlight)
+            {
+                return;
+            }
+
+            var sourceDeck = currentPvpMatch?.opponentDeck ?? currentChoices;
+            if (index < 0 || index >= sourceDeck.Length)
             {
                 return;
             }
 
             HapticFeedback.TriggerLightImpact();
-            StartCoroutine(SubmitBanChoice(currentChoices[index]));
+            rescueBanSubmitInFlight = true;
+            StartCoroutine(SubmitBanChoice(sourceDeck[index]));
         }
 
         private void OnFormationChoiceSelected(int index)
@@ -1975,7 +2316,7 @@ namespace EmojiWar.Client.UI.Match
                 return false;
             }
 
-            var availableUnits = (currentBotMatch.playerTeam ?? Array.Empty<string>())
+            var availableUnits = ResolveBotPlayerFinalTeam(currentBotMatch)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Take(FormationSlotOrder.Length)
                 .Select(value => FormationRescueScreen.UnitView.FromApiId(value, enemyTone: false))
@@ -1993,14 +2334,16 @@ namespace EmojiWar.Client.UI.Match
             rescueFormationScreen.transform.SetAsLastSibling();
             rescueFormationScreen.Bind(
                 availableUnits,
-                string.Empty,
-                string.Empty,
+                currentBotMatch.opponentBannedEmojiId,
+                currentBotMatch.playerBannedEmojiId,
                 assignments,
                 locked,
                 currentBotMatch.botFormation?.placements?.Length ?? 0,
                 OnRescueFormationChanged,
                 OnRescueBotFormationLocked,
-                FormationRescueScreen.ScreenConfig.BotDefault);
+                IsPracticeBotMode()
+                    ? FormationRescueScreen.ScreenConfig.BattlePracticeDefault
+                    : FormationRescueScreen.ScreenConfig.BotDefault);
 
             SetChoiceButtons(Array.Empty<string>(), null);
             SetActionButton(false, string.Empty, null);
@@ -2056,15 +2399,17 @@ namespace EmojiWar.Client.UI.Match
 
             var playerWon = DidPlayerWin(response.winner, true);
             var isDraw = IsDrawResult(response.winner);
+            var playerTeam = ResolveBotPlayerFinalTeam(response);
+            var botTeam = ResolveBotOpponentFinalTeam(response);
             var playerBoard = BuildResultBoardUnits(
                 BuildAssignmentsFromFormation(response.playerFormation),
-                response.playerTeam,
+                playerTeam,
                 BuildAliveLookup(response.battleState?.teamA),
                 enemyTone: false,
                 markWinner: playerWon);
             var botBoard = BuildResultBoardUnits(
                 BuildAssignmentsFromFormation(response.botFormation),
-                response.botTeam,
+                botTeam,
                 BuildAliveLookup(response.battleState?.teamB),
                 enemyTone: true,
                 markWinner: !playerWon && !isDraw);
@@ -2073,9 +2418,9 @@ namespace EmojiWar.Client.UI.Match
             var result = new ResultRescueScreen.ResultModel
             {
                 ResultKey = $"bot|{response.matchId}|{response.winner}|{response.whySummary}",
-                StepText = "STEP 3 OF 3",
+                StepText = IsPracticeBotMode() ? "STEP 4 OF 4" : "STEP 3 OF 3",
                 HeaderTitle = "Battle Result",
-                ModeChipText = "Bot Battle",
+                ModeChipText = IsPracticeBotMode() ? "Battle Practice" : "Bot Battle",
                 OutcomeTitle = BuildOutcomeHeroText(response.winner, true),
                 IsVictory = playerWon,
                 IsDefeat = !playerWon && !isDraw,
@@ -2088,8 +2433,10 @@ namespace EmojiWar.Client.UI.Match
                     botBoard,
                     playerWon,
                     isDraw),
-                YourBanFallbackText = "No ban phase",
-                OpponentBanFallbackText = "No ban phase",
+                YourBanId = response.opponentBannedEmojiId,
+                OpponentBanId = response.playerBannedEmojiId,
+                YourBanFallbackText = IsPracticeBotMode() ? "Ban result unavailable" : "No ban phase",
+                OpponentBanFallbackText = IsPracticeBotMode() ? "Ban result unavailable" : "No ban phase",
                 RecapHighlights = recapHighlights,
                 Moments = replayMoments,
                 YourTeam = new ResultRescueScreen.TeamView
@@ -2100,7 +2447,7 @@ namespace EmojiWar.Client.UI.Match
                 },
                 OpponentTeam = new ResultRescueScreen.TeamView
                 {
-                    Title = "Bot Team",
+                    Title = IsPracticeBotMode() ? "Practice Bot" : "Bot Team",
                     StatusText = !playerWon && !isDraw ? "WIN" : isDraw ? "DRAW" : "FINAL BOARD",
                     BoardUnits = botBoard
                 }
@@ -2235,6 +2582,74 @@ namespace EmojiWar.Client.UI.Match
             HideBattlePresentationRescue();
         }
 
+        private bool TryRenderBotBattlePresentation(StartBotMatchResponseDto response)
+        {
+            if (!UseRescueBattlePresentation || response == null)
+            {
+                return false;
+            }
+
+            EnsureBattlePresentationRescueScreen();
+            if (rescueBattlePresentationScreen == null)
+            {
+                return false;
+            }
+
+            var playerWon = DidPlayerWin(response.winner, true);
+            var isDraw = IsDrawResult(response.winner);
+            var yourBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.playerFormation),
+                ResolveBotPlayerFinalTeam(response),
+                BuildAliveLookup(response.battleState?.teamA),
+                enemyTone: false,
+                markWinner: playerWon);
+            var botBoard = BuildResultBoardUnits(
+                BuildAssignmentsFromFormation(response.botFormation),
+                ResolveBotOpponentFinalTeam(response),
+                BuildAliveLookup(response.battleState?.teamB),
+                enemyTone: true,
+                markWinner: !playerWon && !isDraw);
+
+            var moments = BuildResultMoments(response.battleState, response.whyChain);
+            var hasEventPlayback = response.battleState?.eventLog != null &&
+                                   response.battleState.eventLog.Any(evt => evt != null && !string.IsNullOrWhiteSpace(evt.caption));
+            var model = new BattlePresentationRescueScreen.PresentationModel
+            {
+                PresentationKey = $"{response.matchId}|bot-presentation|{response.winner}|{response.opponentBannedEmojiId}|{response.playerBannedEmojiId}",
+                StepText = "STEP 4 OF 4",
+                ModeChipText = "Battle Practice",
+                HeaderTitle = "Battle Presentation",
+                IntroTitle = "Squads Deploy",
+                IntroSummary = hasEventPlayback
+                    ? "Both formations are locked. Watch the practice battle hit the arena."
+                    : "Both formations are locked. Quick practice highlights are ready.",
+                FinishTitle = BuildOutcomeHeroText(response.winner, true),
+                FinishSummary = BuildWhyBody(response.whySummary),
+                IsVictory = playerWon,
+                IsDefeat = !playerWon && !isDraw,
+                IsDraw = isDraw,
+                UsedEventPlayback = hasEventPlayback,
+                ShowBanRecap = IsPracticeBotMode(),
+                YourBanId = response.opponentBannedEmojiId,
+                OpponentBanId = response.playerBannedEmojiId,
+                YourBanFallbackText = "No ban captured",
+                OpponentBanFallbackText = "No ban captured",
+                YourBoard = yourBoard,
+                OpponentBoard = botBoard,
+                Moments = moments
+            };
+
+            rescueBattlePresentationScreen.gameObject.SetActive(true);
+            rescueBattlePresentationScreen.transform.SetAsLastSibling();
+            rescueBattlePresentationScreen.Bind(
+                model,
+                () => CompleteBotBattlePresentation(response.matchId));
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+            return true;
+        }
+
         private bool TryRenderPvpBattlePresentation(QueueOrJoinMatchResponseDto response)
         {
             if (!UseRescueBattlePresentation || response == null)
@@ -2316,6 +2731,18 @@ namespace EmojiWar.Client.UI.Match
             HideBattlePresentationRescue();
         }
 
+        private void CompleteBotBattlePresentation(string matchId)
+        {
+            if (currentBotMatch != null &&
+                string.Equals(currentBotMatch.matchId, matchId, StringComparison.Ordinal))
+            {
+                RenderBotResult(currentBotMatch, true);
+                return;
+            }
+
+            HideBattlePresentationRescue();
+        }
+
         private void EnsureBattlePresentationRescueScreen()
         {
             if (rescueBattlePresentationScreen != null)
@@ -2376,6 +2803,8 @@ namespace EmojiWar.Client.UI.Match
         private void HideEmojiClashRescue()
         {
             StopEmojiClashResolveRoutine();
+            StopEmojiClashPvpResolveRoutine();
+            StopClashPvpQueueHandoff();
             if (rescueEmojiClashScreen == null)
             {
                 return;
@@ -2396,8 +2825,32 @@ namespace EmojiWar.Client.UI.Match
             emojiClashResolveRoutine = null;
         }
 
+        private void StopEmojiClashPvpResolveRoutine()
+        {
+            if (emojiClashPvpResolveRoutine == null)
+            {
+                return;
+            }
+
+            StopCoroutine(emojiClashPvpResolveRoutine);
+            emojiClashPvpResolveRoutine = null;
+            lastClashPvpRenderKey = string.Empty;
+        }
+
+        private void StopClashPvpQueueHandoff()
+        {
+            if (clashPvpQueueHandoffRoutine == null)
+            {
+                return;
+            }
+
+            StopCoroutine(clashPvpQueueHandoffRoutine);
+            clashPvpQueueHandoffRoutine = null;
+        }
+
         private const float EmojiClashLockPauseSeconds = 0.22f;
-        private const float EmojiClashResolvedPauseSeconds = 0.95f;
+        private const float EmojiClashResolvedPauseSeconds = 1.05f;
+        private const float EmojiClashFinalResolvedPauseSeconds = 3.35f;
 
         private void RenderEmojiClashTurn()
         {
@@ -2474,13 +2927,15 @@ namespace EmojiWar.Client.UI.Match
             HapticFeedback.TriggerLightImpact();
             RenderEmojiClashTurn();
 
-            yield return new WaitForSecondsRealtime(EmojiClashResolvedPauseSeconds);
-
             if (emojiClashController == null)
             {
                 emojiClashResolveRoutine = null;
                 yield break;
             }
+
+            yield return new WaitForSecondsRealtime(emojiClashController.IsMatchComplete
+                ? EmojiClashFinalResolvedPauseSeconds
+                : EmojiClashResolvedPauseSeconds);
 
             if (emojiClashController.IsMatchComplete)
             {
@@ -2501,7 +2956,7 @@ namespace EmojiWar.Client.UI.Match
                 emojiClashController = new EmojiClashController();
             }
 
-            emojiClashController.StartEmojiClash();
+            emojiClashController.StartEmojiClash(startedFromPlayAgain: true);
             RenderEmojiClashTurn();
         }
 
@@ -2509,6 +2964,291 @@ namespace EmojiWar.Client.UI.Match
         {
             LaunchSelections.BeginDeckEdit();
             SceneManager.LoadScene(SceneNames.DeckBuilder);
+        }
+
+        private void RenderCurrentClashPvpState()
+        {
+            if (currentClashPvpMatch == null)
+            {
+                ShowError("Emoji Clash PvP", "Match state unavailable.", "No Quick Clash snapshot is loaded.");
+                return;
+            }
+
+            if (emojiClashPvpResolveRoutine != null)
+            {
+                EnsurePolling();
+                return;
+            }
+
+            if (string.Equals(currentClashPvpMatch.status, "queued", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(currentClashPvpMatch.phase, "queue", StringComparison.OrdinalIgnoreCase))
+            {
+                var queueKey = BuildClashPvpRenderKey(currentClashPvpMatch, "queue");
+                if (string.Equals(lastClashPvpRenderKey, queueKey, StringComparison.Ordinal))
+                {
+                    EnsurePolling();
+                    return;
+                }
+
+                lastClashPvpRenderKey = queueKey;
+                ShowClashPvpQueuedState();
+                EnsurePolling();
+                return;
+            }
+
+            if (currentPanelState == MatchUiPanelState.Queue &&
+                !IsClashPvpFinished(currentClashPvpMatch) &&
+                TryPlayClashPvpQueueHandoff())
+            {
+                EnsurePolling();
+                return;
+            }
+
+            var resolvedCount = currentClashPvpMatch.resolvedTurnHistory?.Length ?? 0;
+            if (resolvedCount > lastClashPvpPresentedTurnCount && emojiClashPvpResolveRoutine == null)
+            {
+                lastClashPvpRenderKey = BuildClashPvpRenderKey(currentClashPvpMatch, $"resolved:{resolvedCount}");
+                RenderClashPvpTurn(showLatestResolvedTurn: true);
+                emojiClashPvpResolveRoutine = StartCoroutine(AdvanceClashPvpAfterResolvedTurn(resolvedCount));
+                EnsurePolling();
+                return;
+            }
+
+            if (IsClashPvpFinished(currentClashPvpMatch))
+            {
+                StopPolling();
+                LaunchSelections.ClearClashPvpResume();
+                var resultKey = BuildClashPvpRenderKey(currentClashPvpMatch, "result");
+                if (string.Equals(lastClashPvpRenderKey, resultKey, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                lastClashPvpRenderKey = resultKey;
+                RenderClashPvpResult();
+                return;
+            }
+
+            var turnKey = BuildClashPvpRenderKey(currentClashPvpMatch, "turn");
+            if (string.Equals(lastClashPvpRenderKey, turnKey, StringComparison.Ordinal))
+            {
+                EnsurePolling();
+                return;
+            }
+
+            lastClashPvpRenderKey = turnKey;
+            RenderClashPvpTurn(showLatestResolvedTurn: false);
+            EnsurePolling();
+        }
+
+        private void ShowClashPvpQueuedState()
+        {
+            HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            EnsureEmojiClashRescueScreen();
+            if (currentClashPvpMatch == null)
+            {
+                ShowError("Emoji Clash PvP", "Queue unavailable.", "No Quick Clash queue snapshot is loaded.");
+                return;
+            }
+
+            currentPanelState = MatchUiPanelState.Queue;
+            rescueEmojiClashScreen.gameObject.SetActive(true);
+            rescueEmojiClashScreen.transform.SetAsLastSibling();
+            rescueEmojiClashScreen.BindQueue(
+                currentClashPvpMatch.queueTicket,
+                currentClashPvpMatch.phaseTimeoutSecondsRemaining,
+                BuildClashPvpQueueStatus(currentClashPvpMatch),
+                ReturnHome);
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+        }
+
+        private bool TryPlayClashPvpQueueHandoff()
+        {
+            if (currentClashPvpMatch == null ||
+                rescueEmojiClashScreen == null ||
+                clashPvpQueueHandoffRoutine != null)
+            {
+                return false;
+            }
+
+            var handoffKey = BuildClashPvpRenderKey(currentClashPvpMatch, "match-found");
+            if (string.Equals(lastClashPvpQueueHandoffKey, handoffKey, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            lastClashPvpQueueHandoffKey = handoffKey;
+            clashPvpQueueHandoffRoutine = StartCoroutine(PlayClashPvpQueueHandoffRoutine());
+            return true;
+        }
+
+        private IEnumerator PlayClashPvpQueueHandoffRoutine()
+        {
+            var completed = false;
+            rescueEmojiClashScreen.PlayQueueMatchFoundHandoff(() => completed = true);
+            var elapsed = 0f;
+            while (!completed && elapsed < 0.70f)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            clashPvpQueueHandoffRoutine = null;
+            if (currentClashPvpMatch != null)
+            {
+                lastClashPvpRenderKey = string.Empty;
+                RenderCurrentClashPvpState();
+            }
+        }
+
+        private void RenderClashPvpTurn(bool showLatestResolvedTurn)
+        {
+            HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            EnsureEmojiClashRescueScreen();
+            if (currentClashPvpMatch == null || rescueEmojiClashScreen == null)
+            {
+                ShowError("Emoji Clash PvP", "Turn unavailable.", "The Quick Clash PvP screen could not render the turn.");
+                return;
+            }
+
+            currentPanelState = currentClashPvpMatch.playerPickLocked ? MatchUiPanelState.Waiting : MatchUiPanelState.Ban;
+            rescueEmojiClashScreen.gameObject.SetActive(true);
+            rescueEmojiClashScreen.transform.SetAsLastSibling();
+            rescueEmojiClashScreen.BindTurn(
+                BuildClashPvpTurnViewModel(currentClashPvpMatch, showLatestResolvedTurn),
+                OnEmojiClashPvpPick,
+                ReturnHome,
+                null);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+        }
+
+        private void RenderClashPvpResult()
+        {
+            HideBlindBanRescue();
+            HideFormationRescue();
+            HideResultRescue();
+            EnsureEmojiClashRescueScreen();
+            if (currentClashPvpMatch == null || rescueEmojiClashScreen == null)
+            {
+                ShowError("Emoji Clash PvP", "Result unavailable.", "The Quick Clash PvP result could not render.");
+                return;
+            }
+
+            currentPanelState = MatchUiPanelState.Result;
+            rescueEmojiClashScreen.gameObject.SetActive(true);
+            rescueEmojiClashScreen.transform.SetAsLastSibling();
+            rescueEmojiClashScreen.BindResult(
+                BuildClashPvpResultViewModel(currentClashPvpMatch),
+                QueueAgainFromEmojiClashPvp,
+                ReturnHome,
+                null);
+
+            SetChoiceButtons(Array.Empty<string>(), null);
+            SetActionButton(false, string.Empty, null);
+        }
+
+        private void OnEmojiClashPvpPick(string unitKey)
+        {
+            if (currentClashPvpMatch == null || emojiClashPvpResolveRoutine != null)
+            {
+                return;
+            }
+
+            var normalized = EmojiClashRules.NormalizeUnitKey(unitKey);
+            if (string.IsNullOrWhiteSpace(normalized) ||
+                (currentClashPvpMatch.playerUsedUnits ?? Array.Empty<string>()).Contains(normalized, StringComparer.OrdinalIgnoreCase) ||
+                currentClashPvpMatch.playerPickLocked)
+            {
+                return;
+            }
+
+            HapticFeedback.TriggerLightImpact();
+            clashPvpLocalPendingPick = normalized;
+            StartCoroutine(SubmitClashPvpPickRoutine(normalized));
+        }
+
+        private IEnumerator SubmitClashPvpPickRoutine(string unitKey)
+        {
+            var bootstrap = AppBootstrap.Instance;
+            if (bootstrap == null || currentClashPvpMatch == null)
+            {
+                ShowError("Emoji Clash PvP", "Pick failed.", "Bootstrap or match snapshot is unavailable.");
+                yield break;
+            }
+
+            var payload = new SubmitClashPickRequestDto
+            {
+                matchId = currentClashPvpMatch.matchId,
+                playerId = bootstrap.SessionState.UserId,
+                turnNumber = Mathf.Clamp(currentClashPvpMatch.currentTurnIndex, 0, EmojiClashRules.TotalTurns - 1) + 1,
+                emojiId = unitKey,
+            };
+
+            using var request = bootstrap.FunctionClient.BuildJsonRequest("submit_clash_pick", JsonUtility.ToJson(payload), bootstrap.SessionState.AccessToken);
+            request.timeout = 10;
+            if (!TryBeginWebRequest(request, out var operation, out var startError))
+            {
+                yield return RecoverClashPvpSnapshotOrShowError("Emoji Clash PvP", "Pick failed.", startError);
+                yield break;
+            }
+
+            yield return operation;
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                yield return RecoverClashPvpSnapshotOrShowError("Emoji Clash PvP", "Pick failed.", BuildRequestErrorDetails(request));
+                yield break;
+            }
+
+            QueueOrJoinClashResponseDto snapshot = null;
+            yield return FetchClashPvpSnapshot(result => snapshot = result, useCurrentMatchId: true);
+            if (snapshot != null)
+            {
+                ApplyClashPvpSnapshot(snapshot);
+                RenderCurrentClashPvpState();
+                yield break;
+            }
+
+            currentClashPvpMatch.playerPickLocked = true;
+            RenderCurrentClashPvpState();
+        }
+
+        private IEnumerator AdvanceClashPvpAfterResolvedTurn(int resolvedCount)
+        {
+            var totalTurns = currentClashPvpMatch != null && currentClashPvpMatch.totalTurns > 0
+                ? currentClashPvpMatch.totalTurns
+                : EmojiClashRules.TotalTurns;
+            var isFinalResolvedTurn = resolvedCount >= totalTurns || IsClashPvpFinished(currentClashPvpMatch);
+            yield return new WaitForSecondsRealtime(isFinalResolvedTurn
+                ? EmojiClashFinalResolvedPauseSeconds
+                : EmojiClashResolvedPauseSeconds);
+            lastClashPvpPresentedTurnCount = Mathf.Max(lastClashPvpPresentedTurnCount, resolvedCount);
+            clashPvpLocalPendingPick = string.Empty;
+            emojiClashPvpResolveRoutine = null;
+            if (currentClashPvpMatch != null)
+            {
+                RenderCurrentClashPvpState();
+            }
+        }
+
+        private void QueueAgainFromEmojiClashPvp()
+        {
+            StopPolling();
+            StopClashPvpQueueHandoff();
+            LaunchSelections.ClearClashPvpResume();
+            lastClashPvpRenderKey = string.Empty;
+            lastClashPvpQueueHandoffKey = string.Empty;
+            lastClashPvpPresentedTurnCount = 0;
+            clashPvpLocalPendingPick = string.Empty;
+            LaunchSelections.BeginEmojiClashPvp();
+            SceneManager.LoadScene(SceneNames.Match);
         }
 
         private void PlayAgainFromResult()
@@ -2777,6 +3517,18 @@ namespace EmojiWar.Client.UI.Match
             var highlights = new List<ResultRescueScreen.MomentView>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildOpponentBanRecap(response.playerBannedEmojiId).Replace("Opponent", "Practice Bot"),
+                actorId: string.Empty,
+                targetId: response.playerBannedEmojiId);
+            AddRecapHighlight(
+                highlights,
+                seen,
+                BuildPlayerBanRecap(response.opponentBannedEmojiId),
+                actorId: string.Empty,
+                targetId: response.opponentBannedEmojiId);
             AddRecapHighlight(
                 highlights,
                 seen,
@@ -3228,6 +3980,97 @@ namespace EmojiWar.Client.UI.Match
             }
         }
 
+        private IEnumerator FetchClashPvpSnapshot(
+            Action<QueueOrJoinClashResponseDto> onSuccess,
+            bool useCurrentMatchId,
+            int attempts = 1,
+            int timeoutSeconds = 10)
+        {
+            var bootstrap = AppBootstrap.Instance;
+            if (bootstrap == null || currentClashPvpRequest == null)
+            {
+                yield break;
+            }
+
+            var payload = new QueueOrJoinClashRequestDto
+            {
+                userId = currentClashPvpRequest.userId,
+                matchId = useCurrentMatchId
+                    ? !string.IsNullOrWhiteSpace(currentMatchId)
+                        ? currentMatchId
+                        : !string.IsNullOrWhiteSpace(currentClashPvpMatch?.matchId)
+                            ? currentClashPvpMatch.matchId
+                            : currentClashPvpRequest.matchId
+                    : currentClashPvpRequest.matchId,
+                forceFreshEntry = !useCurrentMatchId && currentClashPvpRequest.forceFreshEntry,
+            };
+
+            lastPvpRequestError = string.Empty;
+            var maxAttempts = Mathf.Max(1, attempts);
+
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                using var request = bootstrap.FunctionClient.BuildJsonRequest(
+                    "queue_or_join_clash",
+                    JsonUtility.ToJson(payload),
+                    bootstrap.SessionState.AccessToken);
+                request.timeout = timeoutSeconds;
+                if (!TryBeginWebRequest(request, out var operation, out var startError))
+                {
+                    lastPvpRequestError = startError;
+                    yield break;
+                }
+
+                yield return operation;
+
+                if (request.result == UnityWebRequest.Result.Success)
+                {
+                    onSuccess?.Invoke(JsonUtility.FromJson<QueueOrJoinClashResponseDto>(request.downloadHandler.text));
+                    yield break;
+                }
+
+                lastPvpRequestError = BuildRequestErrorDetails(request);
+
+                if (!useCurrentMatchId && IsUnauthorizedResponse(request))
+                {
+                    var recovered = false;
+                    yield return bootstrap.RecoverSessionAfterUnauthorized(success => recovered = success);
+                    if (recovered)
+                    {
+                        payload.userId = bootstrap.SessionState.UserId;
+                        if (currentClashPvpRequest != null)
+                        {
+                            currentClashPvpRequest.userId = bootstrap.SessionState.UserId;
+                        }
+
+                        continue;
+                    }
+                }
+
+                if (attempt >= maxAttempts || !ShouldRetrySnapshotRequest(request))
+                {
+                    yield break;
+                }
+
+                yield return new WaitForSeconds(1f);
+            }
+        }
+
+        private IEnumerator RecoverClashPvpSnapshotOrShowError(string title, string subtitle, string fallbackDetails)
+        {
+            QueueOrJoinClashResponseDto snapshot = null;
+            yield return FetchClashPvpSnapshot(result => snapshot = result, true);
+
+            if (snapshot != null)
+            {
+                ApplyClashPvpSnapshot(snapshot);
+                RenderCurrentClashPvpState();
+                yield break;
+            }
+
+            ShowError(title, subtitle, fallbackDetails);
+        }
+
         private IEnumerator RecoverPvpSnapshotOrShowError(string title, string subtitle, string fallbackDetails)
         {
             QueueOrJoinMatchResponseDto snapshot = null;
@@ -3281,6 +4124,51 @@ namespace EmojiWar.Client.UI.Match
             }
         }
 
+        private void ApplyClashPvpSnapshot(QueueOrJoinClashResponseDto snapshot, bool markExistingResolvedAsPresented = false)
+        {
+            if (snapshot == null)
+            {
+                return;
+            }
+
+            currentClashPvpMatch = snapshot;
+            currentMatchId = snapshot.matchId;
+            UpdateLocalClashPvpDeadline(snapshot);
+            if (markExistingResolvedAsPresented)
+            {
+                lastClashPvpPresentedTurnCount = snapshot.resolvedTurnHistory?.Length ?? 0;
+            }
+
+            if (IsClashPvpFinished(snapshot))
+            {
+                LaunchSelections.ClearClashPvpResume();
+                return;
+            }
+
+            LaunchSelections.StoreClashPvpResume(snapshot.matchId);
+            EnsurePolling();
+        }
+
+        private void UpdateLocalClashPvpDeadline(QueueOrJoinClashResponseDto snapshot)
+        {
+            var key = $"{snapshot.matchId}|{snapshot.phase}|{snapshot.status}|{snapshot.currentTurnIndex}|{snapshot.turnDeadlineAt}";
+            if (string.Equals(localPhaseDeadlineKey, key, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            localPhaseDeadlineKey = key;
+            localPhaseDeadlineUtc = null;
+
+            if (!string.IsNullOrWhiteSpace(snapshot.turnDeadlineAt) &&
+                DateTime.TryParse(snapshot.turnDeadlineAt, out var parsedDeadline))
+            {
+                localPhaseDeadlineUtc = parsedDeadline.Kind == DateTimeKind.Unspecified
+                    ? DateTime.SpecifyKind(parsedDeadline, DateTimeKind.Utc)
+                    : parsedDeadline.ToUniversalTime();
+            }
+        }
+
         private void UpdateLocalPhaseDeadline(QueueOrJoinMatchResponseDto snapshot)
         {
             var key = BuildDeadlineKey(snapshot);
@@ -3319,11 +4207,19 @@ namespace EmojiWar.Client.UI.Match
 
         private void EnsurePolling()
         {
-            if (pollingRoutine != null)
+            if (pollingRoutine != null &&
+                Time.realtimeSinceStartup - pollingHeartbeatRealtime < 20f)
             {
                 return;
             }
 
+            if (pollingRoutine != null)
+            {
+                StopCoroutine(pollingRoutine);
+                pollingRoutine = null;
+            }
+
+            pollingHeartbeatRealtime = Time.realtimeSinceStartup;
             pollingRoutine = StartCoroutine(PollPvpState());
         }
 
@@ -3336,6 +4232,7 @@ namespace EmojiWar.Client.UI.Match
 
             StopCoroutine(pollingRoutine);
             pollingRoutine = null;
+            pollingHeartbeatRealtime = 0f;
         }
 
         private void EnsureUiRefresh()
@@ -3365,6 +4262,12 @@ namespace EmojiWar.Client.UI.Match
             {
                 yield return new WaitForSeconds(1f);
 
+                if (selectedMode == LaunchSelections.EmojiClashPvp && currentClashPvpMatch != null)
+                {
+                    EnsurePolling();
+                    continue;
+                }
+
                 if (selectedMode != LaunchSelections.PvpRanked || currentPvpMatch == null)
                 {
                     continue;
@@ -3393,6 +4296,30 @@ namespace EmojiWar.Client.UI.Match
             while (true)
             {
                 yield return new WaitForSeconds(1.5f);
+                pollingHeartbeatRealtime = Time.realtimeSinceStartup;
+                if (selectedMode == LaunchSelections.EmojiClashPvp)
+                {
+                    QueueOrJoinClashResponseDto clashSnapshot = null;
+                    yield return FetchClashPvpSnapshot(result => clashSnapshot = result, true);
+                    pollingHeartbeatRealtime = Time.realtimeSinceStartup;
+
+                    if (clashSnapshot == null)
+                    {
+                        continue;
+                    }
+
+                    ApplyClashPvpSnapshot(clashSnapshot);
+                    SafeRenderCurrentClashPvpState("poll clash pvp snapshot");
+
+                    if (!ShouldContinueClashPvpPolling(clashSnapshot))
+                    {
+                        pollingRoutine = null;
+                        yield break;
+                    }
+
+                    continue;
+                }
+
                 QueueOrJoinMatchResponseDto snapshot = null;
                 yield return FetchPvpSnapshot(result => snapshot = result, true);
 
@@ -3447,6 +4374,24 @@ namespace EmojiWar.Client.UI.Match
             return false;
         }
 
+        private static bool ShouldContinueClashPvpPolling(QueueOrJoinClashResponseDto snapshot)
+        {
+            if (snapshot == null)
+            {
+                return false;
+            }
+
+            if (IsClashPvpFinished(snapshot))
+            {
+                return false;
+            }
+
+            return string.Equals(snapshot.status, "queued", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(snapshot.phase, "queue", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(snapshot.status, "pick", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(snapshot.phase, "pick", StringComparison.OrdinalIgnoreCase);
+        }
+
         private void ReturnHome()
         {
             if (isLeavingMatch)
@@ -3492,9 +4437,39 @@ namespace EmojiWar.Client.UI.Match
                 LaunchSelections.ClearRankedResume();
                 LaunchSelections.ClearPendingSquad();
             }
+            else if (selectedMode == LaunchSelections.EmojiClashPvp &&
+                     currentClashPvpMatch != null &&
+                     string.Equals(currentClashPvpMatch.status, "queued", StringComparison.OrdinalIgnoreCase))
+            {
+                var bootstrap = AppBootstrap.Instance;
+                if (bootstrap != null)
+                {
+                    var payload = new CancelClashQueueRequestDto
+                    {
+                        userId = bootstrap.SessionState.UserId,
+                        matchId = currentClashPvpMatch.matchId,
+                    };
+
+                    using var request = bootstrap.FunctionClient.BuildJsonRequest(
+                        "cancel_clash_queue",
+                        JsonUtility.ToJson(payload),
+                        bootstrap.SessionState.AccessToken);
+                    request.timeout = 8;
+                    if (TryBeginWebRequest(request, out var operation, out _))
+                    {
+                        yield return operation;
+                    }
+                }
+
+                LaunchSelections.ClearClashPvpResume();
+            }
             else if (selectedMode == LaunchSelections.PvpRanked && IsMatchFinished(currentPvpMatch))
             {
                 LaunchSelections.ClearRankedResume();
+            }
+            else if (selectedMode == LaunchSelections.EmojiClashPvp && IsClashPvpFinished(currentClashPvpMatch))
+            {
+                LaunchSelections.ClearClashPvpResume();
             }
 
             SceneManager.LoadScene(SceneNames.Home);
@@ -3523,6 +4498,21 @@ namespace EmojiWar.Client.UI.Match
             {
                 ShowError(
                     "Ranked PvP",
+                    "Match panel failed to render.",
+                    $"{context}\n{exception.GetType().Name}: {exception.Message}");
+            }
+        }
+
+        private void SafeRenderCurrentClashPvpState(string context)
+        {
+            try
+            {
+                RenderCurrentClashPvpState();
+            }
+            catch (Exception exception)
+            {
+                ShowError(
+                    "Emoji Clash PvP",
                     "Match panel failed to render.",
                     $"{context}\n{exception.GetType().Name}: {exception.Message}");
             }
@@ -4329,7 +5319,7 @@ namespace EmojiWar.Client.UI.Match
 
             if (currentPanelState == MatchUiPanelState.Ban && currentPvpMatch != null && PlayerBanIsLocked(currentPvpMatch))
             {
-                return "Ban locked";
+                return "Ban submitted";
             }
 
             if (currentPanelState == MatchUiPanelState.Formation && currentPvpMatch != null && PlayerFormationIsLocked(currentPvpMatch))
@@ -4414,6 +5404,18 @@ namespace EmojiWar.Client.UI.Match
                     !string.IsNullOrWhiteSpace(snapshot.winner));
         }
 
+        private bool IsPracticeBotMode()
+        {
+            return string.Equals(selectedMode, LaunchSelections.BotPractice, StringComparison.Ordinal);
+        }
+
+        private static bool IsBotBanPhase(StartBotMatchResponseDto snapshot)
+        {
+            return snapshot != null &&
+                   (string.Equals(snapshot.phase, "ban", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(snapshot.status, "banning", StringComparison.OrdinalIgnoreCase));
+        }
+
         private static bool PlayerBanIsLocked(QueueOrJoinMatchResponseDto snapshot)
         {
             return snapshot != null && !string.IsNullOrWhiteSpace(snapshot.opponentBannedEmojiId);
@@ -4450,6 +5452,36 @@ namespace EmojiWar.Client.UI.Match
             }
 
             return $"{snapshot.matchId}|{snapshot.opponentBannedEmojiId}|{snapshot.playerBannedEmojiId}";
+        }
+
+        private static string BuildBotBanRevealKey(StartBotMatchResponseDto snapshot)
+        {
+            if (snapshot == null)
+            {
+                return string.Empty;
+            }
+
+            return $"{snapshot.matchId}|bot|{snapshot.opponentBannedEmojiId}|{snapshot.playerBannedEmojiId}";
+        }
+
+        private static string[] ResolveBotPlayerFinalTeam(StartBotMatchResponseDto snapshot)
+        {
+            if (snapshot?.playerFinalTeam != null && snapshot.playerFinalTeam.Length > 0)
+            {
+                return snapshot.playerFinalTeam;
+            }
+
+            return snapshot?.playerTeam ?? Array.Empty<string>();
+        }
+
+        private static string[] ResolveBotOpponentFinalTeam(StartBotMatchResponseDto snapshot)
+        {
+            if (snapshot?.opponentFinalTeam != null && snapshot.opponentFinalTeam.Length > 0)
+            {
+                return snapshot.opponentFinalTeam;
+            }
+
+            return snapshot?.botTeam ?? Array.Empty<string>();
         }
 
         private static string[] BuildAssignmentsFromFormation(FormationDto formation)
@@ -4616,6 +5648,317 @@ namespace EmojiWar.Client.UI.Match
             return builder.ToString().TrimEnd();
         }
 
+        private string BuildClashPvpQueueDetails(QueueOrJoinClashResponseDto response)
+        {
+            if (response == null)
+            {
+                return "Queue snapshot unavailable.";
+            }
+
+            var builder = new StringBuilder(220);
+            builder.AppendLine("Quick Clash PvP");
+            builder.AppendLine($"Queue Ticket: {ShortId(response.queueTicket)}");
+            builder.AppendLine("Roster: all 16 launch emojis");
+
+            var timeoutLine = BuildClashPvpTimeoutLine(response, "Queue expires in");
+            if (!string.IsNullOrWhiteSpace(timeoutLine))
+            {
+                builder.AppendLine(timeoutLine);
+            }
+
+            builder.AppendLine(string.IsNullOrWhiteSpace(response.note)
+                ? "Status: Searching for opponent."
+                : $"Status: {BuildSingleLineNote(response.note)}");
+            return builder.ToString().TrimEnd();
+        }
+
+        private static string BuildClashPvpQueueStatus(QueueOrJoinClashResponseDto response)
+        {
+            if (response == null)
+            {
+                return "Finding another player for a hidden-pick sticker clash.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(response.note))
+            {
+                return BuildSingleLineNote(response.note);
+            }
+
+            return "Finding another player for a hidden-pick sticker clash.";
+        }
+
+        private EmojiClashTurnViewModel BuildClashPvpTurnViewModel(QueueOrJoinClashResponseDto snapshot, bool showLatestResolvedTurn)
+        {
+            var turnValues = snapshot.turnValues != null && snapshot.turnValues.Length > 0
+                ? snapshot.turnValues
+                : new[] { 1, 1, 2, 2, 3 };
+            var latest = snapshot.resolvedTurnHistory != null && snapshot.resolvedTurnHistory.Length > 0
+                ? snapshot.resolvedTurnHistory[^1]
+                : null;
+            var isResolved = showLatestResolvedTurn && latest != null;
+            var turnIndex = Mathf.Clamp(snapshot.currentTurnIndex, 0, EmojiClashRules.TotalTurns - 1);
+            var playerPick = isResolved
+                ? latest.playerUnitKey
+                : snapshot.playerPickLocked
+                    ? clashPvpLocalPendingPick
+                    : string.Empty;
+            var opponentPick = isResolved ? latest.opponentUnitKey : string.Empty;
+            var playerUsed = new HashSet<string>(snapshot.playerUsedUnits ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            var boardItems = EmojiClashRules.LaunchRoster
+                .Select(unitKey =>
+                {
+                    var profile = EmojiClashRules.GetUnitProfile(unitKey);
+                    return new EmojiClashBoardItemViewModel
+                    {
+                        UnitKey = unitKey,
+                        DisplayName = profile.DisplayName,
+                        Role = profile.Role.ToUpperInvariant(),
+                        CardColor = Color.Lerp(UnitIconLibrary.GetPrimaryColor(unitKey), RescueStickerFactory.Palette.InkPurple, 0.16f),
+                        AuraColor = Color.Lerp(UnitIconLibrary.GetPrimaryColor(unitKey), UnitIconLibrary.GetSecondaryColor(unitKey), 0.32f),
+                        IsAvailable = !playerUsed.Contains(unitKey) && !snapshot.playerPickLocked && !isResolved,
+                        IsSelected = string.Equals(playerPick, unitKey, StringComparison.OrdinalIgnoreCase),
+                        IsUsed = playerUsed.Contains(unitKey)
+                    };
+                })
+                .ToArray();
+
+            return new EmojiClashTurnViewModel
+            {
+                TurnNumber = isResolved ? latest.turnNumber : turnIndex + 1,
+                TotalTurns = snapshot.totalTurns <= 0 ? EmojiClashRules.TotalTurns : snapshot.totalTurns,
+                TurnValue = isResolved ? latest.turnValue : EmojiClashRules.GetTurnValue(turnIndex),
+                WeightedTurnValues = turnValues,
+                PlayerScore = snapshot.playerScore,
+                OpponentScore = snapshot.opponentScore,
+                ScoreSummary = $"You {snapshot.playerScore} - {snapshot.opponentScore} {ResolveClashOpponentLabel(snapshot)}",
+                MomentumNormalized = Mathf.Clamp((snapshot.playerScore - snapshot.opponentScore) / 9f, -1f, 1f),
+                PlayerPickKey = playerPick,
+                OpponentPickKey = opponentPick,
+                ShowOpponentMystery = !isResolved,
+                IsResolved = isResolved,
+                IsLocked = !isResolved && snapshot.playerPickLocked,
+                OutcomeTitle = isResolved ? BuildClashPvpTurnOutcomeTitle(latest) : string.Empty,
+                ReasonText = isResolved
+                    ? BuildClashPvpTurnReasonText(latest)
+                    : snapshot.playerPickLocked
+                        ? "Locked in. Waiting for rival pick."
+                        : BuildClashPvpPickPrompt(snapshot),
+                BoardItems = boardItems
+            };
+        }
+
+        private EmojiClashResultViewModel BuildClashPvpResultViewModel(QueueOrJoinClashResponseDto snapshot)
+        {
+            var isDraw = string.Equals(snapshot.winner, "draw", StringComparison.OrdinalIgnoreCase) || snapshot.playerScore == snapshot.opponentScore;
+            var playerWon = string.Equals(snapshot.winner, snapshot.playerSide, StringComparison.OrdinalIgnoreCase) || snapshot.playerScore > snapshot.opponentScore;
+            var outcome = isDraw ? "DRAW" : playerWon ? "VICTORY" : "DEFEAT";
+            var recaps = BuildClashPvpRecapLines(snapshot).ToArray();
+            var turns = (snapshot.resolvedTurnHistory ?? Array.Empty<ClashTurnRecordDto>())
+                .Reverse()
+                .Select(BuildClashPvpTurnSummary)
+                .ToArray();
+
+            return new EmojiClashResultViewModel
+            {
+                OutcomeTitle = outcome,
+                FinalScoreLine = $"Final Score: You {snapshot.playerScore} - {snapshot.opponentScore} {ResolveClashOpponentLabel(snapshot)}",
+                RecapLines = recaps,
+                TurnLines = turns,
+                IsDraw = isDraw,
+                PrimaryActionLabel = "QUEUE AGAIN"
+            };
+        }
+
+        private static string BuildClashPvpPickPrompt(QueueOrJoinClashResponseDto snapshot)
+        {
+            var timeoutLine = BuildClashPvpTimeoutLine(snapshot, "Pick timer");
+            var strikeLine = snapshot.timeoutStrikesPlayer > 0 || snapshot.timeoutStrikesOpponent > 0
+                ? $"Timeout strikes: You {snapshot.timeoutStrikesPlayer}/2, Rival {snapshot.timeoutStrikesOpponent}/2."
+                : string.Empty;
+            var pickLine = string.IsNullOrWhiteSpace(strikeLine)
+                ? "Pick one fighter."
+                : $"{strikeLine} Pick one fighter.";
+            return string.IsNullOrWhiteSpace(timeoutLine)
+                ? $"{pickLine} Rival reveal happens after both players lock."
+                : $"{timeoutLine}. {pickLine}";
+        }
+
+        private static string ResolveClashOpponentLabel(QueueOrJoinClashResponseDto snapshot)
+        {
+            if (snapshot != null && !string.IsNullOrWhiteSpace(snapshot.display_name_resolved))
+            {
+                return snapshot.display_name_resolved.Trim();
+            }
+
+            return "Rival";
+        }
+
+        private static string BuildClashPvpTurnOutcomeTitle(ClashTurnRecordDto record)
+        {
+            if (record == null)
+            {
+                return string.Empty;
+            }
+
+            return record.outcome switch
+            {
+                "player_win" => record.opponentTimedOut ? $"RIVAL MISSED +{record.turnValue}" : $"YOU WIN +{record.turnValue}",
+                "opponent_win" => record.playerTimedOut ? $"YOU MISSED +{record.turnValue}" : $"RIVAL WINS +{record.turnValue}",
+                _ => record.playerTimedOut || record.opponentTimedOut ? "TIMEOUT DRAW" : "CLASH DRAW"
+            };
+        }
+
+        private static string BuildClashPvpTurnReasonText(ClashTurnRecordDto record)
+        {
+            if (record == null)
+            {
+                return string.Empty;
+            }
+
+            var playerName = string.IsNullOrWhiteSpace(record.playerUnitKey) ? "No pick" : EmojiClashRules.ToDisplayName(record.playerUnitKey);
+            var opponentName = string.IsNullOrWhiteSpace(record.opponentUnitKey) ? "No pick" : EmojiClashRules.ToDisplayName(record.opponentUnitKey);
+            if (record.playerTimedOut || record.opponentTimedOut)
+            {
+                return string.IsNullOrWhiteSpace(record.reason)
+                    ? BuildClashPvpTurnSummary(record)
+                    : record.reason;
+            }
+
+            return record.outcome switch
+            {
+                "player_win" => $"{playerName} beat {opponentName}.",
+                "opponent_win" => $"{opponentName} beat {playerName}.",
+                _ => $"{playerName} and {opponentName} clashed to a draw."
+            };
+        }
+
+        private static string BuildClashPvpTurnSummary(ClashTurnRecordDto record)
+        {
+            if (record == null)
+            {
+                return string.Empty;
+            }
+
+            var playerName = string.IsNullOrWhiteSpace(record.playerUnitKey) ? "No pick" : EmojiClashRules.ToDisplayName(record.playerUnitKey);
+            var opponentName = string.IsNullOrWhiteSpace(record.opponentUnitKey) ? "No pick" : EmojiClashRules.ToDisplayName(record.opponentUnitKey);
+            if (record.playerTimedOut && record.opponentTimedOut)
+            {
+                return $"T{record.turnNumber} +{record.turnValue}  Both missed";
+            }
+
+            if (record.opponentTimedOut)
+            {
+                return $"T{record.turnNumber} +{record.turnValue}  Rival missed, lost {opponentName}";
+            }
+
+            if (record.playerTimedOut)
+            {
+                return $"T{record.turnNumber} +{record.turnValue}  You missed, lost {playerName}";
+            }
+
+            return record.outcome switch
+            {
+                "player_win" => $"T{record.turnNumber} +{record.turnValue}  {playerName} beat {opponentName}",
+                "opponent_win" => $"T{record.turnNumber} +{record.turnValue}  {playerName} lost to {opponentName}",
+                _ => $"T{record.turnNumber} +{record.turnValue}  Draw"
+            };
+        }
+
+        private static IEnumerable<string> BuildClashPvpRecapLines(QueueOrJoinClashResponseDto snapshot)
+        {
+            var records = snapshot.resolvedTurnHistory ?? Array.Empty<ClashTurnRecordDto>();
+            if (!string.IsNullOrWhiteSpace(snapshot.finishReason) &&
+                snapshot.finishReason.IndexOf("timeout_forfeit", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                yield return snapshot.winner switch
+                {
+                    "draw" => "Both players forfeited on timeouts. The match ended in a draw.",
+                    var winner when string.Equals(winner, snapshot.playerSide, StringComparison.OrdinalIgnoreCase) => "Rival missed too many turns. You win by forfeit.",
+                    _ => "You missed too many turns. Match forfeited."
+                };
+            }
+
+            var finalTurn = records.LastOrDefault();
+            if (finalTurn != null)
+            {
+                yield return finalTurn.outcome == "draw"
+                    ? "The final +3 clash ended in a draw."
+                    : $"Turn 5 swung on {EmojiClashRules.ToDisplayName(finalTurn.outcome == "player_win" ? finalTurn.playerUnitKey : finalTurn.opponentUnitKey)}.";
+            }
+
+            var biggest = records
+                .OrderByDescending(record => record.turnValue)
+                .FirstOrDefault(record => record.outcome != "draw");
+            if (biggest != null && !string.IsNullOrWhiteSpace(biggest.reason))
+            {
+                yield return biggest.reason;
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshot.note))
+            {
+                yield return snapshot.note;
+            }
+        }
+
+        private static bool IsClashPvpFinished(QueueOrJoinClashResponseDto snapshot)
+        {
+            return snapshot != null &&
+                   (string.Equals(snapshot.phase, "finished", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(snapshot.status, "finished", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool HasVisibleClashPvpTimeout(QueueOrJoinClashResponseDto snapshot)
+        {
+            return snapshot != null && snapshot.phaseTimeoutSecondsRemaining > 0;
+        }
+
+        private static string BuildClashPvpRenderKey(QueueOrJoinClashResponseDto snapshot, string view)
+        {
+            if (snapshot == null)
+            {
+                return string.Empty;
+            }
+
+            var historyLength = snapshot.resolvedTurnHistory?.Length ?? 0;
+            var latest = historyLength > 0 ? snapshot.resolvedTurnHistory[^1] : null;
+            return string.Join("|", new[]
+            {
+                view ?? string.Empty,
+                snapshot.matchId ?? string.Empty,
+                snapshot.status ?? string.Empty,
+                snapshot.phase ?? string.Empty,
+                snapshot.currentTurnIndex.ToString(),
+                snapshot.playerScore.ToString(),
+                snapshot.opponentScore.ToString(),
+                snapshot.playerPickLocked ? "p1" : "p0",
+                snapshot.opponentPickLocked ? "o1" : "o0",
+                snapshot.timeoutStrikesPlayer.ToString(),
+                snapshot.timeoutStrikesOpponent.ToString(),
+                historyLength.ToString(),
+                latest?.turnNumber.ToString() ?? "0",
+                latest?.playerUnitKey ?? string.Empty,
+                latest?.opponentUnitKey ?? string.Empty,
+                snapshot.winner ?? string.Empty,
+                snapshot.finishReason ?? string.Empty
+            });
+        }
+
+        private static string BuildClashPvpTimeoutLine(QueueOrJoinClashResponseDto snapshot, string prefix)
+        {
+            if (snapshot == null)
+            {
+                return string.Empty;
+            }
+
+            var seconds = snapshot.phaseTimeoutSecondsRemaining;
+            if (seconds <= 0)
+            {
+                return string.Empty;
+            }
+
+            return $"{prefix}: {seconds}s";
+        }
+
         private string BuildBanDetails(QueueOrJoinMatchResponseDto snapshot, bool locked)
         {
             if (snapshot == null)
@@ -4627,7 +5970,7 @@ namespace EmojiWar.Client.UI.Match
             builder.AppendLine("Your 6");
             builder.AppendLine(BuildEmojiSummary(snapshot.playerDeck));
             builder.AppendLine("Enemy 6");
-            builder.AppendLine(BuildEmojiSummary(snapshot.opponentDeck));
+            builder.AppendLine(BuildHiddenBanSummary(snapshot.opponentDeck));
             builder.AppendLine();
             builder.AppendLine($"Your ban on enemy: {HumanizeEmojiIdOrPending(snapshot.opponentBannedEmojiId)}");
             builder.AppendLine($"Enemy ban on you: {HumanizeEmojiIdOrPending(snapshot.playerBannedEmojiId)}");
@@ -4642,16 +5985,27 @@ namespace EmojiWar.Client.UI.Match
             {
                 builder.AppendLine();
                 builder.Append(string.IsNullOrWhiteSpace(snapshot.playerBannedEmojiId)
-                    ? "Ban locked. Waiting for enemy ban lock."
+                    ? "Ban submitted. Waiting for enemy ban."
                     : "Both bans locked. Moving to formation.");
             }
             else
             {
                 builder.AppendLine();
-                builder.Append("Tap exactly 1 enemy emoji to ban.");
+                builder.Append("Tap exactly 1 mystery slot to ban.");
             }
 
             return builder.ToString();
+        }
+
+        private static string[] BuildHiddenBanSlots(IReadOnlyCollection<string> sourceDeck)
+        {
+            var count = sourceDeck == null || sourceDeck.Count == 0 ? 6 : Math.Min(6, sourceDeck.Count);
+            return Enumerable.Range(1, count).Select(index => $"Mystery Slot {index}").ToArray();
+        }
+
+        private static string BuildHiddenBanSummary(IReadOnlyCollection<string> sourceDeck)
+        {
+            return string.Join("  ", BuildHiddenBanSlots(sourceDeck).Select((_, index) => $"Slot {index + 1}"));
         }
 
         private string BuildPvpFormationDetailsPrefix(QueueOrJoinMatchResponseDto snapshot)
@@ -4689,8 +6043,16 @@ namespace EmojiWar.Client.UI.Match
             }
 
             var builder = new StringBuilder(220);
-            builder.AppendLine($"Your Final 5: {BuildEmojiSummary(snapshot.playerTeam)}");
-            builder.AppendLine($"Bot Final 5: {BuildEmojiSummary(snapshot.botTeam)}");
+            builder.AppendLine($"Your Final 5: {BuildEmojiSummary(ResolveBotPlayerFinalTeam(snapshot))}");
+            builder.AppendLine($"Bot Final 5: {BuildEmojiSummary(ResolveBotOpponentFinalTeam(snapshot))}");
+            if (!string.IsNullOrWhiteSpace(snapshot.opponentBannedEmojiId) ||
+                !string.IsNullOrWhiteSpace(snapshot.playerBannedEmojiId))
+            {
+                builder.AppendLine();
+                builder.AppendLine(
+                    $"Bans • Your ban: {HumanizeEmojiIdOrPending(snapshot.opponentBannedEmojiId)} | Bot ban: {HumanizeEmojiIdOrPending(snapshot.playerBannedEmojiId)}");
+            }
+
             builder.Append("Tap slots in order: Front Left → Front Center → Front Right → Back Left → Back Right");
 
             return builder.ToString();
@@ -5103,11 +6465,14 @@ namespace EmojiWar.Client.UI.Match
             return string.IsNullOrWhiteSpace(emojiId) ? "Pending" : HumanizeEmojiId(emojiId);
         }
 
-        private static bool TryResolveEntryDeck(AppBootstrap bootstrap, bool isBotMode, out string[] selectedDeck, out string deckId, out string error)
+        private static bool TryResolveEntryDeck(AppBootstrap bootstrap, string mode, out string[] selectedDeck, out string deckId, out string error)
         {
             selectedDeck = Array.Empty<string>();
             deckId = string.Empty;
             error = string.Empty;
+            var isRankedMode = string.Equals(mode, LaunchSelections.PvpRanked, StringComparison.Ordinal);
+            var isPracticeMode = string.Equals(mode, LaunchSelections.BotPractice, StringComparison.Ordinal);
+            var isSmartBotMode = string.Equals(mode, LaunchSelections.BotSmart, StringComparison.Ordinal);
 
             if (bootstrap == null)
             {
@@ -5126,15 +6491,21 @@ namespace EmojiWar.Client.UI.Match
                     return false;
                 }
 
-                if (!isBotMode && pendingSquad.Count != 6)
+                if (isRankedMode && pendingSquad.Count != 6)
                 {
                     error = "Ranked requires exactly 6 selected emojis before blind ban.";
                     return false;
                 }
 
-                if (isBotMode && pendingSquad.Count != 5)
+                if (isPracticeMode && pendingSquad.Count != 6)
                 {
-                    error = "Bot battle requires exactly 5 selected emojis.";
+                    error = "Battle Practice requires exactly 6 selected emojis before blind ban.";
+                    return false;
+                }
+
+                if (isSmartBotMode && (pendingSquad.Count < 5 || pendingSquad.Count > 6))
+                {
+                    error = "Smart Bot requires 5 or 6 selected emojis.";
                     return false;
                 }
 
@@ -5145,9 +6516,16 @@ namespace EmojiWar.Client.UI.Match
 
             if (bootstrap.ActiveDeckService.HasActiveDeck)
             {
-                if (!isBotMode && bootstrap.ActiveDeckService.ActiveDeckEmojiIds.Count != 6)
+                if ((isRankedMode || isPracticeMode) && bootstrap.ActiveDeckService.ActiveDeckEmojiIds.Count != 6)
                 {
-                    error = "Ranked requires a 6-emoji squad.";
+                    error = isPracticeMode ? "Battle Practice requires a 6-emoji squad." : "Ranked requires a 6-emoji squad.";
+                    return false;
+                }
+
+                if (isSmartBotMode &&
+                    (bootstrap.ActiveDeckService.ActiveDeckEmojiIds.Count < 5 || bootstrap.ActiveDeckService.ActiveDeckEmojiIds.Count > 6))
+                {
+                    error = "Smart Bot requires a 5 or 6-emoji squad.";
                     return false;
                 }
 
@@ -5156,8 +6534,10 @@ namespace EmojiWar.Client.UI.Match
                 return true;
             }
 
-            error = isBotMode
-                ? "Choose 5 emojis before starting Battle Bot."
+            error = isPracticeMode
+                ? "Choose 6 emojis before starting Battle Practice."
+                : isSmartBotMode
+                ? "Choose 5 or 6 emojis before starting Smart Bot."
                 : "Choose 6 emojis before entering ranked.";
             return false;
         }

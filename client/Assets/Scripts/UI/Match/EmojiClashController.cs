@@ -12,13 +12,14 @@ namespace EmojiWar.Client.UI.Match
         private const int MaxScore = 9;
 
         private readonly IEmojiClashOpponent opponent;
-        private readonly int initialSeed;
+        private readonly int? fixedSeed;
         private bool currentTurnResolved;
+        private bool matchCompletionTelemetryRecorded;
 
         public EmojiClashController(IEmojiClashOpponent opponent = null, int? seed = null)
         {
             this.opponent = opponent ?? new EmojiClashBotOpponent();
-            initialSeed = seed ?? Environment.TickCount;
+            fixedSeed = seed;
             State = new EmojiClashMatchState();
         }
 
@@ -26,14 +27,33 @@ namespace EmojiWar.Client.UI.Match
 
         public bool IsMatchComplete => State.TurnHistory.Count >= EmojiClashRules.TotalTurns;
 
-        public void StartEmojiClash()
+        public void StartEmojiClash(bool startedFromPlayAgain = false)
         {
             State = new EmojiClashMatchState
             {
                 CurrentTurnIndex = 0,
-                MatchSeed = initialSeed
+                MatchSeed = fixedSeed ?? GenerateFreshMatchSeed(),
+                MatchId = Guid.NewGuid().ToString("N"),
+                StartedFromPlayAgain = startedFromPlayAgain
             };
             currentTurnResolved = false;
+            matchCompletionTelemetryRecorded = false;
+        }
+
+        public static int GenerateFreshMatchSeed()
+        {
+            unchecked
+            {
+                var bytes = Guid.NewGuid().ToByteArray();
+                var hash = Environment.TickCount;
+                hash = (hash * 397) ^ (int)DateTime.UtcNow.Ticks;
+                for (var index = 0; index < bytes.Length; index += sizeof(int))
+                {
+                    hash = (hash * 397) ^ BitConverter.ToInt32(bytes, index);
+                }
+
+                return hash == 0 ? 1 : hash;
+            }
         }
 
         public IReadOnlyList<string> GetAvailablePlayerUnitKeys()
@@ -66,14 +86,75 @@ namespace EmojiWar.Client.UI.Match
             }
 
             State.PendingPlayerPick = normalizedKey;
-            State.PendingOpponentPick = opponent.PickUnit(State, GetAvailableOpponentUnitKeys());
+            var botVisibleState = CreateBotVisibleState();
+            AssertBotStateDoesNotExposeHiddenPick(botVisibleState);
+            State.PendingOpponentPick = opponent.PickUnit(botVisibleState, GetAvailableOpponentUnitKeys());
             if (!string.IsNullOrWhiteSpace(State.PendingOpponentPick))
             {
+                EmojiClashPickTelemetry.RecordLocalPickPair(botVisibleState, normalizedKey, State.PendingOpponentPick);
                 return true;
             }
 
             State.PendingPlayerPick = string.Empty;
             return false;
+        }
+
+        private EmojiClashMatchState CreateBotVisibleState()
+        {
+            var visibleState = new EmojiClashMatchState
+            {
+                CurrentTurnIndex = State.CurrentTurnIndex,
+                PlayerScore = State.PlayerScore,
+                OpponentScore = State.OpponentScore,
+                MatchSeed = State.MatchSeed,
+                MatchId = State.MatchId,
+                StartedFromPlayAgain = State.StartedFromPlayAgain
+            };
+
+            foreach (var unitKey in State.PlayerUsedUnitKeys)
+            {
+                visibleState.PlayerUsedUnitKeys.Add(unitKey);
+            }
+
+            foreach (var unitKey in State.OpponentUsedUnitKeys)
+            {
+                visibleState.OpponentUsedUnitKeys.Add(unitKey);
+            }
+
+            foreach (var record in State.TurnHistory)
+            {
+                visibleState.TurnHistory.Add(new EmojiClashTurnRecord
+                {
+                    TurnNumber = record.TurnNumber,
+                    TurnValue = record.TurnValue,
+                    PlayerUnitKey = record.PlayerUnitKey,
+                    OpponentUnitKey = record.OpponentUnitKey,
+                    PlayerCombatPower = record.PlayerCombatPower,
+                    OpponentCombatPower = record.OpponentCombatPower,
+                    Outcome = record.Outcome,
+                    PlayerScoreAfter = record.PlayerScoreAfter,
+                    OpponentScoreAfter = record.OpponentScoreAfter,
+                    PlayerFacingReason = record.PlayerFacingReason
+                });
+            }
+
+            return visibleState;
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR"), System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void AssertBotStateDoesNotExposeHiddenPick(EmojiClashMatchState botState)
+        {
+            if (botState == null)
+            {
+                Debug.LogWarning("Emoji Clash bot selection was invoked without a visible-state snapshot.");
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(botState.PendingPlayerPick) ||
+                !string.IsNullOrWhiteSpace(botState.PendingOpponentPick))
+            {
+                Debug.LogWarning("Emoji Clash bot selection received unresolved pending pick state. The bot must only receive visible match state.");
+            }
         }
 
         public EmojiClashTurnRecord ResolveLockedTurn()
@@ -205,6 +286,11 @@ namespace EmojiWar.Client.UI.Match
             if (resolvedTurn.TurnNumber >= EmojiClashRules.TotalTurns)
             {
                 State.CurrentTurnIndex = EmojiClashRules.TotalTurns;
+                if (!matchCompletionTelemetryRecorded)
+                {
+                    EmojiClashPickTelemetry.RecordMatchCompleted(State);
+                    matchCompletionTelemetryRecorded = true;
+                }
             }
         }
 
@@ -370,5 +456,6 @@ namespace EmojiWar.Client.UI.Match
         public string[] RecapLines = Array.Empty<string>();
         public string[] TurnLines = Array.Empty<string>();
         public bool IsDraw;
+        public string PrimaryActionLabel = "PLAY AGAIN";
     }
 }
